@@ -11,45 +11,58 @@ from planandsubscription.serializers import (
            ModelPlanSerializer, UpdateSubscriptionSerializer
            )
 from coreapp.serializers import GetCustomUserSerializer, StorageOutputSerializer
-
-
-# # Define your validation function outside of the serializer class
-# def validate_username_and_email(value):
-#     if value is None:
-#         raise serializers.ValidationError("Username is required")
-#     return value
-
-# # Define your serializer class
-# class YourSerializer(serializers.Serializer):
-#     # Override the CharField class and add the validation function to its validators list
-#     username = serializers.CharField(validators=[validate_username_and_email])
-#     email = serializers.EmailField()
-
-#     def validate(self, attrs):
-#         # Additional validation logic if needed
-        
-#         return attrs
+from backend.validators import (
+    validate_password_strength,
+    validate_email_format,
+    validate_email_domain,
+    validate_username,
+    validate_phone_number,
+    validate_country_code,
+    sanitize_text,
+    validate_referral_code,
+)
 
 
 class SocialLoginSerializer(serializers.Serializer):
-    # password = serializers.CharField(write_only=True)
-    username = serializers.CharField()
-    email = serializers.EmailField()
-    socialId = serializers.CharField()
+    """Serializer for social login with input validation."""
+    username = serializers.CharField(max_length=30)
+    email = serializers.EmailField(max_length=255)
+    socialId = serializers.CharField(max_length=255)
     socialType = serializers.IntegerField()
-    role = serializers.CharField()
+    role = serializers.CharField(max_length=50)
     password_generate = serializers.BooleanField()
-    deviceToken = serializers.CharField(required=False)
+    deviceToken = serializers.CharField(required=False, max_length=500, allow_blank=True)
     cluster_id = serializers.IntegerField(required=False)
+
+    def validate_username(self, value):
+        """Validate and sanitize username."""
+        return validate_username(value)
+
+    def validate_email(self, value):
+        """Validate email format and domain."""
+        value = validate_email_format(value)
+        value = validate_email_domain(value)
+        return value.lower()
+
+    def validate_socialType(self, value):
+        """Validate social type is valid."""
+        valid_types = [1, 2, 3]  # 1=Google, 2=Apple, 3=Facebook
+        if value not in valid_types:
+            raise serializers.ValidationError("Invalid social login type.")
+        return value
+
+    def validate_role(self, value):
+        """Validate role is valid."""
+        valid_roles = ['user', 'admin', 'cluster_admin']
+        if value.lower() not in valid_roles:
+            raise serializers.ValidationError("Invalid role specified.")
+        return value.lower()
 
     def create(self, validated_data):
         role = validated_data.pop('role')
-
         user = CustomUser.objects.create_user(**validated_data)
-
         role, _ = Role.objects.get_or_create(name=role)
         user.roles.add(role)
-
         return user
 
 
@@ -110,23 +123,99 @@ class UpdateSerializer(serializers.ModelSerializer):
         return data
 
 class RegisterSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True)
-    role = serializers.CharField()
+    """Serializer for user registration with comprehensive validation."""
+    password = serializers.CharField(write_only=True, min_length=8, max_length=128)
+    password2 = serializers.CharField(write_only=True, min_length=8, max_length=128, required=False)
+    role = serializers.CharField(max_length=50)
+    referral_code = serializers.CharField(required=False, allow_blank=True, max_length=12)
 
     class Meta:
         model = CustomUser
         exclude = ["roles"]
-    
+        extra_kwargs = {
+            'email': {'required': True},
+            'username': {'required': True},
+        }
+
+    def validate_email(self, value):
+        """Validate email format, domain, and uniqueness."""
+        value = validate_email_format(value)
+        value = validate_email_domain(value)
+        value = value.lower()
+
+        # Check for existing user with this email
+        if CustomUser.objects.filter(email=value, is_delete=False).exists():
+            raise serializers.ValidationError("A user with this email already exists.")
+        return value
+
+    def validate_username(self, value):
+        """Validate username format and uniqueness."""
+        value = validate_username(value)
+
+        # Check for existing user with this username
+        if CustomUser.objects.filter(username__iexact=value, is_delete=False).exists():
+            raise serializers.ValidationError("This username is already taken.")
+        return value
+
+    def validate_password(self, value):
+        """Validate password strength."""
+        return validate_password_strength(value)
+
+    def validate_role(self, value):
+        """Validate role is valid."""
+        valid_roles = ['user', 'admin', 'cluster_admin']
+        if value.lower() not in valid_roles:
+            raise serializers.ValidationError("Invalid role specified.")
+        return value.lower()
+
+    def validate_referral_code(self, value):
+        """Validate referral code if provided."""
+        if value:
+            value = validate_referral_code(value)
+            # Check if referral code exists
+            if not CustomUser.objects.filter(referral_code=value, is_delete=False).exists():
+                raise serializers.ValidationError("Invalid referral code.")
+        return value
+
+    def validate_phone_number(self, value):
+        """Validate phone number if provided."""
+        if value:
+            return validate_phone_number(value)
+        return value
+
+    def validate_country_code(self, value):
+        """Validate country code if provided."""
+        if value:
+            return validate_country_code(value)
+        return value
+
+    def validate_name(self, value):
+        """Sanitize name field."""
+        if value:
+            return sanitize_text(value)
+        return value
+
+    def validate(self, attrs):
+        """Cross-field validation."""
+        # Check password confirmation if provided
+        password2 = attrs.pop('password2', None)
+        if password2 and attrs.get('password') != password2:
+            raise serializers.ValidationError({
+                "password2": "Passwords do not match."
+            })
+        return attrs
+
     def create(self, validated_data):
         validated_data['is_verified'] = False
         validated_data['profile_image'] = None
 
         role = validated_data.pop('role')
+        validated_data.pop('password2', None)  # Remove if present
 
-        user = CustomUser.objects.create_user(**validated_data) # Use create_user method for hash password
+        user = CustomUser.objects.create_user(**validated_data)
 
-        role, _ = Role.objects.get_or_create(name=role)
-        user.roles.add(role)
+        role_obj, _ = Role.objects.get_or_create(name=role)
+        user.roles.add(role_obj)
 
         user.save()
         return user
@@ -149,28 +238,66 @@ class ImageUrlSerializer(serializers.Serializer):
 
 
 class ChangePasswordSerializer(serializers.Serializer):
-    old_password = serializers.CharField(required=True)
-    new_password = serializers.CharField(required=True)
+    """Serializer for password change with validation."""
+    old_password = serializers.CharField(required=True, max_length=128)
+    new_password = serializers.CharField(required=True, min_length=8, max_length=128)
+    new_password2 = serializers.CharField(required=True, min_length=8, max_length=128)
 
     def validate_old_password(self, value):
+        """Validate old password is correct."""
         user = self.context['request'].user
         if not user.check_password(value):
             raise serializers.ValidationError("Old password is incorrect.")
         return value
 
     def validate_new_password(self, value):
-        if len(value) < 8:
-            raise serializers.ValidationError("New password must be at least 8 characters long.")
-        return value
-    
-    
-class ForgotPasswordSerializer(serializers.Serializer):
-    email = serializers.EmailField()
+        """Validate new password strength."""
+        return validate_password_strength(value)
 
-    
+    def validate(self, attrs):
+        """Cross-field validation."""
+        # Check passwords match
+        if attrs.get('new_password') != attrs.get('new_password2'):
+            raise serializers.ValidationError({
+                "new_password2": "New passwords do not match."
+            })
+
+        # Check new password is different from old
+        user = self.context['request'].user
+        if user.check_password(attrs.get('new_password')):
+            raise serializers.ValidationError({
+                "new_password": "New password must be different from the old password."
+            })
+
+        return attrs
+
+
+class ForgotPasswordSerializer(serializers.Serializer):
+    """Serializer for forgot password request."""
+    email = serializers.EmailField(max_length=255)
+
+    def validate_email(self, value):
+        """Validate email format."""
+        return validate_email_format(value).lower()
+
+
 class PasswordResetSerializer(serializers.Serializer):
-    token = serializers.CharField()
-    password = serializers.CharField()
+    """Serializer for password reset with token."""
+    token = serializers.CharField(max_length=500)
+    password = serializers.CharField(min_length=8, max_length=128)
+    password2 = serializers.CharField(min_length=8, max_length=128)
+
+    def validate_password(self, value):
+        """Validate password strength."""
+        return validate_password_strength(value)
+
+    def validate(self, attrs):
+        """Cross-field validation."""
+        if attrs.get('password') != attrs.get('password2'):
+            raise serializers.ValidationError({
+                "password2": "Passwords do not match."
+            })
+        return attrs
 
     
 class UserDetailSerializer(serializers.Serializer):
