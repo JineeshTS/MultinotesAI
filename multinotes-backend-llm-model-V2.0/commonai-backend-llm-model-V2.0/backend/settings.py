@@ -83,6 +83,7 @@ INSTALLED_APPS = [
     'corsheaders',
     'django_crontab',
     'celery',
+    'drf_spectacular',
     # Local apps
     'authentication',
     'coreapp',
@@ -178,6 +179,93 @@ REST_FRAMEWORK = {
         'user': '1000/hour',
     },
     'EXCEPTION_HANDLER': 'backend.exceptions.custom_exception_handler',
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+}
+
+
+# =============================================================================
+# API DOCUMENTATION (DRF Spectacular)
+# =============================================================================
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'MultinotesAI API',
+    'DESCRIPTION': '''
+## MultinotesAI - Multi-LLM SaaS Platform API
+
+MultinotesAI is a comprehensive platform that allows users to interact with multiple
+Large Language Models (LLMs) for various AI-powered tasks.
+
+### Features
+- **Multi-LLM Support**: Access multiple AI providers (TogetherAI, Gemini, OpenAI)
+- **Text Generation**: Text-to-text conversations with various models
+- **Image Generation**: Text-to-image generation capabilities
+- **Document Analysis**: Upload and analyze documents
+- **Speech-to-Text**: Audio transcription services
+- **Subscription Management**: Flexible plans with token-based usage
+
+### Authentication
+All API endpoints (except public ones) require JWT Bearer token authentication.
+Include the token in the Authorization header:
+```
+Authorization: Bearer <your_access_token>
+```
+
+### Rate Limiting
+- Anonymous users: 100 requests/hour
+- Authenticated users: 1000 requests/hour
+    ''',
+    'VERSION': '2.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+
+    # Authentication
+    'SECURITY': [{'Bearer': []}],
+    'APPEND_COMPONENTS': {
+        'securitySchemes': {
+            'Bearer': {
+                'type': 'http',
+                'scheme': 'bearer',
+                'bearerFormat': 'JWT',
+                'description': 'JWT Bearer token authentication'
+            }
+        }
+    },
+
+    # Schema organization
+    'TAGS': [
+        {'name': 'Authentication', 'description': 'User registration, login, and account management'},
+        {'name': 'LLM', 'description': 'Large Language Model management and selection'},
+        {'name': 'Prompts', 'description': 'AI prompt submission and response management'},
+        {'name': 'Folders', 'description': 'Content organization and folder management'},
+        {'name': 'Documents', 'description': 'Document upload and management'},
+        {'name': 'Notebooks', 'description': 'Notebook creation and management'},
+        {'name': 'Subscription', 'description': 'Plan and subscription management'},
+        {'name': 'Payments', 'description': 'Razorpay payment processing'},
+        {'name': 'Admin', 'description': 'Administrative endpoints'},
+    ],
+
+    # Customize responses
+    'POSTPROCESSING_HOOKS': [],
+
+    # Contact information
+    'CONTACT': {
+        'name': 'MultinotesAI Support',
+        'email': 'support@multinotesai.com',
+    },
+
+    # License
+    'LICENSE': {
+        'name': 'Proprietary',
+    },
+
+    # External docs
+    'EXTERNAL_DOCS': {
+        'description': 'MultinotesAI Documentation',
+        'url': 'https://docs.multinotesai.com',
+    },
+
+    # Component settings
+    'COMPONENT_SPLIT_REQUEST': True,
+    'COMPONENT_NO_READ_ONLY_REQUIRED': True,
 }
 
 
