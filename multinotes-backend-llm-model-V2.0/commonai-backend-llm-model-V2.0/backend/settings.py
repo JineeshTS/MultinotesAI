@@ -13,69 +13,115 @@ https://docs.djangoproject.com/en/5.0/ref/settings/
 from pathlib import Path
 import os
 from dotenv import load_dotenv
-from django.utils.timezone import timedelta
+from datetime import timedelta
+from django.core.exceptions import ImproperlyConfigured
 
+# Load environment variables from .env file
 load_dotenv()
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/5.0/howto/deployment/checklist/
+# =============================================================================
+# HELPER FUNCTIONS
+# =============================================================================
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-jngin3g$w_3cm_bjqoktp1p5wo=4m8*-gw&wd6tzd1!q06s$s+'
+def get_env_variable(var_name, default=None, required=False):
+    """Get environment variable or raise exception if required and not set."""
+    value = os.getenv(var_name, default)
+    if required and value is None:
+        raise ImproperlyConfigured(f"Set the {var_name} environment variable")
+    return value
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.getenv('DEBUG')
 
-ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', default='localhost').split(',')
+def get_bool_env(var_name, default=False):
+    """Get boolean environment variable."""
+    value = os.getenv(var_name, str(default)).lower()
+    return value in ('true', '1', 'yes', 'on')
 
 
-# Application definition
+def get_list_env(var_name, default='', separator=','):
+    """Get list from environment variable."""
+    value = os.getenv(var_name, default)
+    return [item.strip() for item in value.split(separator) if item.strip()]
+
+
+# =============================================================================
+# CORE SETTINGS
+# =============================================================================
+
+# SECURITY: Secret key from environment variable
+# Generate a new key: python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"
+SECRET_KEY = get_env_variable(
+    'SECRET_KEY',
+    default='django-insecure-dev-only-change-this-in-production',
+)
+
+# SECURITY: Debug mode - MUST be False in production
+DEBUG = get_bool_env('DEBUG', False)
+
+# Allowed hosts from environment
+ALLOWED_HOSTS = get_list_env('ALLOWED_HOSTS', 'localhost,127.0.0.1')
+
+
+# =============================================================================
+# APPLICATION DEFINITION
+# =============================================================================
 
 INSTALLED_APPS = [
-    # "daphne",
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'rest_framework_simplejwt',
-    'corsheaders',
+    # Third party apps
     'rest_framework',
+    'rest_framework_simplejwt',
+    'rest_framework_simplejwt.token_blacklist',
+    'corsheaders',
     'django_crontab',
+    'celery',
+    # Local apps
     'authentication',
     'coreapp',
     'adminpanel',
-    'celery',
     'ticketandcategory',
     'planandsubscription',
 ]
 
 WSGI_APPLICATION = 'backend.wsgi.application'
-# ASGI_APPLICATION = 'backend.asgi.application'
+ASGI_APPLICATION = 'backend.asgi.application'
+
+
+# =============================================================================
+# MIDDLEWARE
+# =============================================================================
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',  # Must be at top
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
-    "corsheaders.middleware.CorsMiddleware",
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'authentication.middleware.CheckUserStatus'
-    # 'authentication.middleware.CustomMiddleware'
+    'authentication.middleware.CheckUserStatus',
 ]
 
 ROOT_URLCONF = 'backend.urls'
 
+
+# =============================================================================
+# TEMPLATES
+# =============================================================================
+
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -88,11 +134,31 @@ TEMPLATES = [
     },
 ]
 
-# REST_FRAMEWORK = {
-#     'DEFAULT_AUTHENTICATION_CLASSES': (
-#         'rest_framework_simplejwt.authentication.JWTAuthentication',
-#     )
-# }
+
+# =============================================================================
+# DATABASE
+# =============================================================================
+
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': get_env_variable('DB_NAME', 'multinotesai'),
+        'USER': get_env_variable('DB_USER', 'root'),
+        'PASSWORD': get_env_variable('DB_PASSWORD', ''),
+        'HOST': get_env_variable('DB_HOST', 'localhost'),
+        'PORT': get_env_variable('DB_PORT', '3306'),
+        'OPTIONS': {
+            'charset': 'utf8mb4',
+            'init_command': "SET sql_mode='STRICT_TRANS_TABLES'",
+        },
+        'CONN_MAX_AGE': 60,  # Connection pooling
+    }
+}
+
+
+# =============================================================================
+# REST FRAMEWORK
+# =============================================================================
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
@@ -101,37 +167,33 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
-
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
-    'PAGE_SIZE': 10,  # Set your desired default page size here    
+    'PAGE_SIZE': 10,
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '100/hour',
+        'user': '1000/hour',
+    },
+    'EXCEPTION_HANDLER': 'backend.exceptions.custom_exception_handler',
 }
 
-# Database
-# https://docs.djangoproject.com/en/5.0/ref/settings/#databases
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.mysql',
-        'NAME': os.getenv('DB_NAME'),
-        'USER': os.getenv('DB_USER'),
-        'PASSWORD': os.getenv('DB_PASSWORD'),
-        'HOST': os.getenv('DB_HOST'),
-        'PORT': os.getenv('DB_PORT', '5433'),
-        'OPTIONS': {
-            'charset': 'utf8mb4',
-        },
-    }
-}
+# =============================================================================
+# JWT AUTHENTICATION
+# =============================================================================
 
-# JWT AUTHENTICATION SETTINGS
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(days=15),
-    "REFRESH_TOKEN_LIFETIME": timedelta(days=15),
+    "ACCESS_TOKEN_LIFETIME": timedelta(days=7),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=30),
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
-    "UPDATE_LAST_LOGIN": False,
+    "UPDATE_LAST_LOGIN": True,
 
     "ALGORITHM": "HS256",
+    "SIGNING_KEY": SECRET_KEY,
     "VERIFYING_KEY": "",
     "AUDIENCE": None,
     "ISSUER": None,
@@ -152,7 +214,7 @@ SIMPLE_JWT = {
     "JTI_CLAIM": "jti",
 
     "SLIDING_TOKEN_REFRESH_EXP_CLAIM": "refresh_exp",
-    "SLIDING_TOKEN_LIFETIME": timedelta(days=30),
+    "SLIDING_TOKEN_LIFETIME": timedelta(days=7),
     "SLIDING_TOKEN_REFRESH_LIFETIME": timedelta(days=30),
 
     "TOKEN_OBTAIN_SERIALIZER": "rest_framework_simplejwt.serializers.TokenObtainPairSerializer",
@@ -163,8 +225,10 @@ SIMPLE_JWT = {
     "SLIDING_TOKEN_REFRESH_SERIALIZER": "rest_framework_simplejwt.serializers.TokenRefreshSlidingSerializer",
 }
 
-# Password validation
-# https://docs.djangoproject.com/en/5.0/ref/settings/#auth-password-validators
+
+# =============================================================================
+# PASSWORD VALIDATION
+# =============================================================================
 
 AUTH_PASSWORD_VALIDATORS = [
     {
@@ -172,6 +236,7 @@ AUTH_PASSWORD_VALIDATORS = [
     },
     {
         'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
+        'OPTIONS': {'min_length': 8},
     },
     {
         'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
@@ -182,103 +247,263 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 
-# Internationalization
-# https://docs.djangoproject.com/en/5.0/topics/i18n/
-
+# =============================================================================
+# INTERNATIONALIZATION
+# =============================================================================
 
 LANGUAGE_CODE = 'en-us'
-
-# TIME_ZONE = 'Asia/Kolkata'
 TIME_ZONE = 'UTC'
-
 USE_I18N = True
-
 USE_TZ = True
 
-AUTH_USER_MODEL = 'authentication.CustomUser'
 
-# Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/5.0/howto/static-files/
+# =============================================================================
+# STATIC & MEDIA FILES
+# =============================================================================
 
+STATIC_URL = '/static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATICFILES_DIRS = [BASE_DIR / 'static'] if (BASE_DIR / 'static').exists() else []
 
-if os.getenv('DEBUG'):
-    STATIC_URL = 'static/'
-else:
-    STATIC_URL = "/static/"
-    STATIC_ROOT = "staticfiles"
-
-# Default primary key field type
-# https://docs.djangoproject.com/en/5.0/ref/settings/#default-auto-field
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# CORS_ORIGIN_ALLOW_ALL = False
-
-CORS_ORIGIN_ALLOW_ALL = True
-
-MEDIA_URL = '/media/'
-MEDIA_ROOT=BASE_DIR /'media'
-
-FILE_UPLOAD_MAX_MEMORY_SIZE = 214958080  # 250 MB, for example
-
-# CORS_ALLOWED_ORIGINS = [
-#     "https://prototype.multinotes.ai",
-#     "https://www.prototype.multinotes.ai",
-#     "http://localhost:5173"  
-# ]
+# File upload settings
+FILE_UPLOAD_MAX_MEMORY_SIZE = 262144000  # 250 MB
+DATA_UPLOAD_MAX_MEMORY_SIZE = 262144000  # 250 MB
 
 
-AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
-AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
-AWS_STORAGE_BUCKET_NAME = os.getenv('AWS_BUCKET')
-AWS_S3_REGION_NAME = os.getenv('AWS_DEFAULT_REGION')
+# =============================================================================
+# CORS SETTINGS
+# =============================================================================
+
+# SECURITY: Don't allow all origins in production
+CORS_ALLOW_ALL_ORIGINS = get_bool_env('CORS_ALLOW_ALL', DEBUG)
+
+# If CORS_ALLOW_ALL_ORIGINS is False, specify allowed origins
+if not CORS_ALLOW_ALL_ORIGINS:
+    CORS_ALLOWED_ORIGINS = get_list_env('CORS_ALLOWED_ORIGINS', 'http://localhost:5173')
+
+CORS_ALLOW_CREDENTIALS = True
+
+CORS_ALLOW_HEADERS = [
+    'accept',
+    'accept-encoding',
+    'authorization',
+    'content-type',
+    'dnt',
+    'origin',
+    'user-agent',
+    'x-csrftoken',
+    'x-requested-with',
+]
+
+
+# =============================================================================
+# SECURITY SETTINGS (Production)
+# =============================================================================
+
+if not DEBUG:
+    # HTTPS settings
+    SECURE_SSL_REDIRECT = get_bool_env('SECURE_SSL_REDIRECT', True)
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
+    # HSTS settings
+    SECURE_HSTS_SECONDS = int(get_env_variable('SECURE_HSTS_SECONDS', '31536000'))
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+
+    # Cookie security
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+
+    # Additional security headers
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    SECURE_BROWSER_XSS_FILTER = True
+    X_FRAME_OPTIONS = 'DENY'
+
+    # CSRF settings
+    CSRF_TRUSTED_ORIGINS = get_list_env('CSRF_TRUSTED_ORIGINS', '')
+
+
+# =============================================================================
+# AWS S3 CONFIGURATION
+# =============================================================================
+
+AWS_ACCESS_KEY_ID = get_env_variable('AWS_ACCESS_KEY_ID')
+AWS_SECRET_ACCESS_KEY = get_env_variable('AWS_SECRET_ACCESS_KEY')
+AWS_STORAGE_BUCKET_NAME = get_env_variable('AWS_BUCKET')
+AWS_S3_REGION_NAME = get_env_variable('AWS_DEFAULT_REGION', 'ap-south-1')
+
+AWS_S3_FILE_OVERWRITE = False
+AWS_DEFAULT_ACL = None
+AWS_S3_SIGNATURE_VERSION = 's3v4'
+AWS_QUERYSTRING_AUTH = True
+AWS_QUERYSTRING_EXPIRE = 3600  # 1 hour
 
 DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
 
 
-# Set the default "from" email address
-DEFAULT_FROM_EMAIL = os.getenv('SMTP_USERNAME')
+# =============================================================================
+# EMAIL CONFIGURATION
+# =============================================================================
 
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-EMAIL_HOST = os.getenv('SMTP_HOST')
-EMAIL_PORT = os.getenv('SMTP_PORT') # Gmail SMTP port for TLS
-EMAIL_HOST_USER = os.getenv('SMTP_USERNAME')  # Your Gmail email address
-EMAIL_HOST_PASSWORD = os.getenv('SMTP_PASSWORD')  # Your Gmail password or app-specific password
-EMAIL_USE_TLS = True  # Enable TLS encryption
-
-# Increase response timeout to 60 seconds
-TIMEOUT = 60
+EMAIL_HOST = get_env_variable('SMTP_HOST', 'smtp.gmail.com')
+EMAIL_PORT = int(get_env_variable('SMTP_PORT', '587'))
+EMAIL_HOST_USER = get_env_variable('SMTP_USERNAME')
+EMAIL_HOST_PASSWORD = get_env_variable('SMTP_PASSWORD')
+EMAIL_USE_TLS = True
+DEFAULT_FROM_EMAIL = get_env_variable('SMTP_USERNAME')
 
 
-# Celery settings
-CELERY_BROKER_URL = 'redis://localhost:6379/0'
-CELERY_RESULT_BACKEND = "redis://localhost:6379/0"
-# CELERY_ACCEPT_CONTENT = ['application/json']
-# CELERY_RESULT_SERIALIZER = 'json'
-# CELERY_TASK_SERIALIZER = 'json'
-# CELERY_STORE_ERRORS_EVEN_IF_IGNORED = True
-# CELERY_TASK_RESULT_EXPIRES = 3600  # Expires after 1 hour (3600 seconds)
+# =============================================================================
+# RAZORPAY CONFIGURATION
+# =============================================================================
+
+RAZORPAY_KEY_ID = get_env_variable('RAZORPAY_KEY_ID')
+RAZORPAY_KEY_SECRET = get_env_variable('RAZORPAY_KEY_SECRET')
+RAZORPAY_WEBHOOK_SECRET = get_env_variable('RAZORPAY_WEBHOOK_SECRET')
+
+
+# =============================================================================
+# CELERY CONFIGURATION
+# =============================================================================
+
+REDIS_URL = get_env_variable('REDIS_URL', 'redis://localhost:6379/0')
+
+CELERY_BROKER_URL = get_env_variable('CELERY_BROKER_URL', REDIS_URL)
+CELERY_RESULT_BACKEND = get_env_variable('CELERY_RESULT_BACKEND', REDIS_URL)
+CELERY_ACCEPT_CONTENT = ['application/json']
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = 30 * 60  # 30 minutes
+
+
+# =============================================================================
+# DJANGO CHANNELS (WebSocket)
+# =============================================================================
 
 CHANNEL_LAYERS = {
     'default': {
         'BACKEND': 'channels_redis.core.RedisChannelLayer',
         'CONFIG': {
-            'hosts': [('localhost', 6379)],
+            'hosts': [REDIS_URL],
         },
     },
 }
 
-# GOOGLE_REDIRECT_URI = 'https://ibcomm.in/'
-GOOGLE_REDIRECT_URI = os.getenv('GOOGLE_REDIRECT_URI')
 
-# Enable this only in development environments
-# os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
+# =============================================================================
+# OAUTH CONFIGURATION
+# =============================================================================
+
+GOOGLE_CLIENT_ID = get_env_variable('GOOGLE_CLIENT_ID')
+GOOGLE_CLIENT_SECRET = get_env_variable('GOOGLE_CLIENT_SECRET')
+GOOGLE_REDIRECT_URI = get_env_variable('GOOGLE_REDIRECT_URI')
+
+FACEBOOK_APP_ID = get_env_variable('FACEBOOK_APP_ID')
+FACEBOOK_APP_SECRET = get_env_variable('FACEBOOK_APP_SECRET')
 
 
-# CRONJOBS = [
-#     ('05 00 * * *', 'busApi.cron.refresh_tbo_token','>> /home/ubuntu/myprojectdir/GoHopTripDjango/busApi/log.txt')
-# ]
+# =============================================================================
+# LLM API KEYS
+# =============================================================================
+
+TOGETHER_API_KEY = get_env_variable('TOGETHER_API_KEY')
+GEMINI_API_KEY = get_env_variable('GEMINI_API_KEY')
+OPENAI_API_KEY = get_env_variable('OPENAI_API_KEY')
+
+
+# =============================================================================
+# CUSTOM USER MODEL
+# =============================================================================
+
+AUTH_USER_MODEL = 'authentication.CustomUser'
+
+
+# =============================================================================
+# CRON JOBS
+# =============================================================================
 
 CRONJOBS = [
-    ('* * * * *', 'authentication.cron.refreshSubscription','>> /home/anil/multinote/commonai-backend/log.txt')
+    ('0 0 * * *', 'authentication.cron.refreshSubscription'),  # Run daily at midnight
 ]
+
+
+# =============================================================================
+# LOGGING
+# =============================================================================
+
+LOG_LEVEL = get_env_variable('LOG_LEVEL', 'INFO')
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {process:d} {thread:d} {message}',
+            'style': '{',
+        },
+        'simple': {
+            'format': '{levelname} {asctime} {message}',
+            'style': '{',
+        },
+    },
+    'filters': {
+        'require_debug_false': {
+            '()': 'django.utils.log.RequireDebugFalse',
+        },
+    },
+    'handlers': {
+        'console': {
+            'level': LOG_LEVEL,
+            'class': 'logging.StreamHandler',
+            'formatter': 'simple',
+        },
+        'file': {
+            'level': 'WARNING',
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': BASE_DIR / 'logs' / 'django.log',
+            'maxBytes': 1024 * 1024 * 5,  # 5 MB
+            'backupCount': 5,
+            'formatter': 'verbose',
+        },
+        'mail_admins': {
+            'level': 'ERROR',
+            'filters': ['require_debug_false'],
+            'class': 'django.utils.log.AdminEmailHandler',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': LOG_LEVEL,
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['console', 'file'],
+            'level': LOG_LEVEL,
+            'propagate': False,
+        },
+        'django.request': {
+            'handlers': ['file', 'mail_admins'],
+            'level': 'ERROR',
+            'propagate': False,
+        },
+    },
+}
+
+# Create logs directory if it doesn't exist
+(BASE_DIR / 'logs').mkdir(exist_ok=True)
+
+
+# =============================================================================
+# TIMEOUT SETTINGS
+# =============================================================================
+
+# Increase response timeout to 60 seconds
+TIMEOUT = 60
