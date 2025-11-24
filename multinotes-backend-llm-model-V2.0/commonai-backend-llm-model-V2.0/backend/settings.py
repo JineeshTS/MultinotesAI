@@ -438,13 +438,30 @@ DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
 # EMAIL CONFIGURATION
 # =============================================================================
 
-EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+# Use console backend in development, SMTP in production
+if DEBUG:
+    EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+else:
+    EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+
 EMAIL_HOST = get_env_variable('SMTP_HOST', 'smtp.gmail.com')
 EMAIL_PORT = int(get_env_variable('SMTP_PORT', '587'))
 EMAIL_HOST_USER = get_env_variable('SMTP_USERNAME')
 EMAIL_HOST_PASSWORD = get_env_variable('SMTP_PASSWORD')
 EMAIL_USE_TLS = True
-DEFAULT_FROM_EMAIL = get_env_variable('SMTP_USERNAME')
+EMAIL_USE_SSL = False
+EMAIL_TIMEOUT = 30  # seconds
+
+# From email configuration
+DEFAULT_FROM_EMAIL = get_env_variable(
+    'DEFAULT_FROM_EMAIL',
+    'MultinotesAI <noreply@multinotesai.com>'
+)
+SERVER_EMAIL = get_env_variable('SERVER_EMAIL', DEFAULT_FROM_EMAIL)
+
+# Additional email service settings
+SITE_URL = get_env_variable('SITE_URL', 'https://multinotesai.com')
+SUPPORT_EMAIL = get_env_variable('SUPPORT_EMAIL', 'support@multinotesai.com')
 
 
 # =============================================================================
