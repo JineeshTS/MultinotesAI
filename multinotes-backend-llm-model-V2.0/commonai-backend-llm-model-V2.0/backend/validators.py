@@ -574,3 +574,302 @@ referral_code_validator = RegexValidator(
     regex=r'^[A-Z0-9]{6,12}$',
     message='Referral code must be 6-12 alphanumeric characters.'
 )
+
+
+# =============================================================================
+# Magic Number Validation (File Type Verification)
+# =============================================================================
+
+# Magic bytes for common file types
+FILE_MAGIC_BYTES = {
+    # Images
+    'image/jpeg': [b'\xff\xd8\xff'],
+    'image/png': [b'\x89PNG\r\n\x1a\n'],
+    'image/gif': [b'GIF87a', b'GIF89a'],
+    'image/webp': [b'RIFF'],  # Full check: RIFF....WEBP
+    'image/bmp': [b'BM'],
+    'image/tiff': [b'II*\x00', b'MM\x00*'],
+
+    # Documents
+    'application/pdf': [b'%PDF'],
+    'application/zip': [b'PK\x03\x04', b'PK\x05\x06', b'PK\x07\x08'],
+    'application/msword': [b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1'],  # OLE compound
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': [b'PK\x03\x04'],  # DOCX is ZIP
+
+    # Audio
+    'audio/mpeg': [b'\xff\xfb', b'\xff\xfa', b'\xff\xf3', b'ID3'],
+    'audio/wav': [b'RIFF'],  # Full check: RIFF....WAVE
+    'audio/ogg': [b'OggS'],
+    'audio/flac': [b'fLaC'],
+
+    # Video
+    'video/mp4': [b'ftyp', b'\x00\x00\x00'],
+    'video/webm': [b'\x1a\x45\xdf\xa3'],
+
+    # Archives
+    'application/x-rar-compressed': [b'Rar!\x1a\x07'],
+    'application/x-7z-compressed': [b'7z\xbc\xaf\x27\x1c'],
+    'application/gzip': [b'\x1f\x8b'],
+}
+
+
+def validate_file_magic_bytes(file, expected_types=None):
+    """
+    Validate file type by checking magic bytes.
+
+    This prevents attackers from disguising malicious files
+    by simply changing the file extension.
+
+    Args:
+        file: File object with read capability
+        expected_types: List of expected MIME types (optional)
+
+    Returns:
+        Detected MIME type or None
+
+    Raises:
+        ValidationError if file type doesn't match expected
+    """
+    # Read first 32 bytes for magic number check
+    file.seek(0)
+    header = file.read(32)
+    file.seek(0)  # Reset file pointer
+
+    detected_type = None
+
+    # Check against known magic bytes
+    for mime_type, magic_list in FILE_MAGIC_BYTES.items():
+        for magic in magic_list:
+            if header.startswith(magic):
+                detected_type = mime_type
+                break
+        if detected_type:
+            break
+
+    # Special handling for formats that need additional checks
+    if header.startswith(b'RIFF') and len(header) >= 12:
+        # Could be WAV or WebP
+        format_type = header[8:12]
+        if format_type == b'WAVE':
+            detected_type = 'audio/wav'
+        elif format_type == b'WEBP':
+            detected_type = 'image/webp'
+
+    # If expected types provided, validate match
+    if expected_types and detected_type not in expected_types:
+        if detected_type:
+            raise serializers.ValidationError(
+                f"File type mismatch. Expected {', '.join(expected_types)}, "
+                f"but file appears to be {detected_type}."
+            )
+        else:
+            raise serializers.ValidationError(
+                "Could not verify file type. File may be corrupted or unsupported."
+            )
+
+    return detected_type
+
+
+def validate_image_file_secure(file, max_size_mb=5):
+    """
+    Securely validate image file with magic byte checking.
+
+    Args:
+        file: Uploaded file object
+        max_size_mb: Maximum file size in MB
+
+    Returns:
+        Validated file
+
+    Raises:
+        ValidationError if validation fails
+    """
+    allowed_types = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
+
+    # Check file size first
+    validate_file_size(file, max_size_mb=max_size_mb)
+
+    # Check extension
+    filename = file.name.lower() if hasattr(file, 'name') else ''
+    allowed_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp']
+    if not any(filename.endswith(ext) for ext in allowed_extensions):
+        raise serializers.ValidationError(
+            "Invalid image file extension."
+        )
+
+    # Verify magic bytes
+    detected_type = validate_file_magic_bytes(file, expected_types=allowed_types)
+
+    # Additional validation: try to open as image
+    try:
+        from PIL import Image
+        file.seek(0)
+        img = Image.open(file)
+        img.verify()  # Verify image integrity
+        file.seek(0)
+    except ImportError:
+        pass  # PIL not installed, skip this check
+    except Exception:
+        raise serializers.ValidationError(
+            "Invalid or corrupted image file."
+        )
+
+    return file
+
+
+def validate_document_file_secure(file, max_size_mb=25):
+    """
+    Securely validate document file with magic byte checking.
+
+    Args:
+        file: Uploaded file object
+        max_size_mb: Maximum file size in MB
+
+    Returns:
+        Validated file
+
+    Raises:
+        ValidationError if validation fails
+    """
+    allowed_types = [
+        'application/pdf',
+        'application/msword',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/zip',  # DOCX/XLSX are ZIP-based
+    ]
+
+    # Check file size
+    validate_file_size(file, max_size_mb=max_size_mb)
+
+    # Check extension
+    filename = file.name.lower() if hasattr(file, 'name') else ''
+    allowed_extensions = ['.pdf', '.doc', '.docx', '.txt', '.xls', '.xlsx']
+    if not any(filename.endswith(ext) for ext in allowed_extensions):
+        raise serializers.ValidationError(
+            "Invalid document file extension."
+        )
+
+    # For text files, just check for null bytes (indicates binary)
+    if filename.endswith('.txt'):
+        file.seek(0)
+        content = file.read(1024)
+        file.seek(0)
+        if b'\x00' in content:
+            raise serializers.ValidationError(
+                "Invalid text file. File appears to be binary."
+            )
+        return file
+
+    # Verify magic bytes for binary documents
+    validate_file_magic_bytes(file, expected_types=allowed_types)
+
+    return file
+
+
+def validate_no_executable_content(file):
+    """
+    Check file for executable content or embedded scripts.
+
+    Args:
+        file: File object
+
+    Returns:
+        True if safe, raises ValidationError otherwise
+    """
+    # Dangerous magic bytes
+    dangerous_signatures = [
+        b'MZ',  # Windows executable
+        b'\x7fELF',  # Linux executable
+        b'\xca\xfe\xba\xbe',  # macOS executable
+        b'#!',  # Shell script
+        b'<?php',  # PHP
+        b'<%',  # ASP
+    ]
+
+    file.seek(0)
+    header = file.read(64)
+    file.seek(0)
+
+    for sig in dangerous_signatures:
+        if header.startswith(sig):
+            raise serializers.ValidationError(
+                "File type not allowed. Executable files are prohibited."
+            )
+
+    # Check for embedded scripts in content
+    file.seek(0)
+    content = file.read()
+    file.seek(0)
+
+    dangerous_patterns = [
+        b'<script',
+        b'javascript:',
+        b'vbscript:',
+        b'<?php',
+        b'<%',
+    ]
+
+    content_lower = content.lower()
+    for pattern in dangerous_patterns:
+        if pattern in content_lower:
+            raise serializers.ValidationError(
+                "File contains potentially malicious content."
+            )
+
+    return True
+
+
+def validate_filename(filename):
+    """
+    Validate and sanitize filename.
+
+    Prevents path traversal and other attacks.
+
+    Args:
+        filename: Original filename
+
+    Returns:
+        Sanitized filename
+
+    Raises:
+        ValidationError if filename is dangerous
+    """
+    import os
+    import unicodedata
+
+    if not filename:
+        raise serializers.ValidationError("Filename is required.")
+
+    # Normalize unicode
+    filename = unicodedata.normalize('NFKC', filename)
+
+    # Get just the filename (remove any path components)
+    filename = os.path.basename(filename)
+
+    # Remove null bytes
+    filename = filename.replace('\x00', '')
+
+    # Check for path traversal attempts
+    if '..' in filename or filename.startswith('/') or filename.startswith('\\'):
+        raise serializers.ValidationError(
+            "Invalid filename. Path traversal not allowed."
+        )
+
+    # Remove/replace dangerous characters
+    dangerous_chars = ['<', '>', ':', '"', '|', '?', '*', '\n', '\r']
+    for char in dangerous_chars:
+        filename = filename.replace(char, '_')
+
+    # Limit filename length
+    if len(filename) > 255:
+        # Preserve extension
+        name, ext = os.path.splitext(filename)
+        filename = name[:255 - len(ext)] + ext
+
+    # Ensure filename is not empty after sanitization
+    if not filename or filename == '.':
+        raise serializers.ValidationError(
+            "Invalid filename."
+        )
+
+    return filename
