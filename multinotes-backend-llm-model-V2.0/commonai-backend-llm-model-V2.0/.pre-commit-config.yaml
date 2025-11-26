@@ -1,0 +1,180 @@
+# Pre-commit hooks configuration for MultinotesAI
+# Install: pip install pre-commit && pre-commit install
+# Run: pre-commit run --all-files
+
+repos:
+  # Pre-commit hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      # Prevent large files from being committed
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+
+      # Check for files that would conflict on case-insensitive filesystems
+      - id: check-case-conflict
+
+      # Check for merge conflict markers
+      - id: check-merge-conflict
+
+      # Check YAML syntax
+      - id: check-yaml
+        args: [--unsafe]
+
+      # Check JSON syntax
+      - id: check-json
+
+      # Ensure files end with newline
+      - id: end-of-file-fixer
+        exclude: '^.*\.(json|md)$'
+
+      # Trim trailing whitespace
+      - id: trailing-whitespace
+        exclude: '^.*\.(json|md)$'
+
+      # Check for debugger imports
+      - id: debug-statements
+
+      # Don't commit directly to main/master
+      - id: no-commit-to-branch
+        args: [--branch, main, --branch, master]
+
+      # Prevent private keys from being committed
+      - id: detect-private-key
+
+      # Check for symlinks that don't point to anything
+      - id: check-symlinks
+
+  # Detect secrets in code
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.4.0
+    hooks:
+      - id: detect-secrets
+        args: ['--baseline', '.secrets.baseline']
+        exclude: package.lock.json
+
+  # Python code formatting
+  - repo: https://github.com/psf/black
+    rev: 24.1.1
+    hooks:
+      - id: black
+        language_version: python3
+        args: [--line-length=100]
+
+  # Python import sorting
+  - repo: https://github.com/pycqa/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        args: [--profile=black, --line-length=100]
+
+  # Python linting
+  - repo: https://github.com/pycqa/flake8
+    rev: 7.0.0
+    hooks:
+      - id: flake8
+        args: [
+          '--max-line-length=100',
+          '--extend-ignore=E203,E501,W503',
+          '--per-file-ignores=__init__.py:F401'
+        ]
+        additional_dependencies:
+          - flake8-bugbear
+          - flake8-comprehensions
+
+  # Python type checking
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.8.0
+    hooks:
+      - id: mypy
+        args: [--ignore-missing-imports, --no-strict-optional]
+        additional_dependencies:
+          - types-requests
+          - types-redis
+          - django-stubs
+
+  # Security vulnerability scanner
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.7
+    hooks:
+      - id: bandit
+        args: ['-c', 'pyproject.toml', '-r', '-ll']
+        additional_dependencies: ['bandit[toml]']
+        exclude: tests/
+
+  # Django specific checks
+  - repo: local
+    hooks:
+      # Check for hardcoded secrets
+      - id: check-secrets
+        name: Check for hardcoded secrets
+        entry: python scripts/check_secrets.py
+        language: python
+        types: [python]
+        pass_filenames: true
+
+      # Check Django settings
+      - id: check-django-settings
+        name: Check Django production settings
+        entry: python -c "
+import re
+import sys
+
+patterns = [
+    (r'DEBUG\s*=\s*True', 'DEBUG should not be True in committed code'),
+    (r'SECRET_KEY\s*=\s*[\"\\'][^$]', 'SECRET_KEY should use environment variable'),
+    (r'ALLOWED_HOSTS\s*=\s*\\[\\s*[\"\\']\\*[\"\\']', 'ALLOWED_HOSTS should not be [\"*\"]'),
+    (r'password\s*=\s*[\"\\'][^${}]', 'Passwords should use environment variables'),
+]
+
+errors = []
+for filename in sys.argv[1:]:
+    if 'settings' in filename:
+        with open(filename, 'r') as f:
+            content = f.read()
+            for pattern, message in patterns:
+                if re.search(pattern, content, re.IGNORECASE):
+                    errors.append(f'{filename}: {message}')
+
+if errors:
+    for error in errors:
+        print(error)
+    sys.exit(1)
+"
+        language: python
+        types: [python]
+        files: settings
+
+      # Check for print statements in production code
+      - id: no-print
+        name: Check for print statements
+        entry: python -c "
+import re
+import sys
+
+for filename in sys.argv[1:]:
+    with open(filename, 'r') as f:
+        for i, line in enumerate(f, 1):
+            if re.match(r'^\\s*print\\s*\\(', line) and '#' not in line.split('print')[0]:
+                print(f'{filename}:{i}: Found print() statement')
+                sys.exit(1)
+"
+        language: python
+        types: [python]
+        exclude: (tests/|scripts/|manage\.py|conftest\.py)
+
+      # Django migrations check
+      - id: check-migrations
+        name: Check for missing migrations
+        entry: python manage.py makemigrations --check --dry-run
+        language: system
+        pass_filenames: false
+        always_run: true
+
+# Configuration for specific tools
+ci:
+  autofix_commit_msg: |
+    [pre-commit.ci] auto fixes from pre-commit.com hooks
+  autoupdate_commit_msg: |
+    [pre-commit.ci] pre-commit autoupdate
+  autoupdate_schedule: weekly

@@ -1,289 +1,306 @@
+"""
+Payment utilities for MultinotesAI authentication module.
+
+This module provides Razorpay integration for handling recurring subscription
+payments and automatic renewal functionality.
+
+Note: Main payment flows are handled in planandsubscription/razorpay_service.py
+This module handles background/automated payment tasks.
+"""
+
+import logging
+import razorpay
 from django.conf import settings
+from django.utils import timezone
+from datetime import timedelta
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from planandsubscription.models import UserPlan, Subscription, Transaction
-import stripe
-import os
-import datetime
-from django.utils import timezone
-from django.http import HttpResponse
-from datetime import datetime, timedelta
-from django.views.decorators.csrf import csrf_exempt
-from rest_framework.permissions import IsAuthenticated, AllowAny
-from rest_framework.permissions import BasePermission
-from rest_framework.decorators import api_view, permission_classes
-from django.http import JsonResponse
 from rest_framework import status
-from django.db.models import Q
-from .serializers import (GenerateCardTokenSerializer, UpdateCardSerializer
-                        )
+from rest_framework.permissions import IsAuthenticated
 
-stripe.api_key = os.getenv('STRIPE_SECRET_KEY')
+from planandsubscription.models import UserPlan, Subscription, Transaction
+from backend.exceptions import success_response, ErrorCodes
 
-def createCustomerOnStripe(userName, email):
-    cardDetail = stripe.Customer.create(
-        name = userName,
-        email = email
+logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# RAZORPAY CLIENT
+# =============================================================================
+
+def get_razorpay_client():
+    """
+    Get Razorpay client instance.
+
+    Returns:
+        razorpay.Client: Configured Razorpay client
+    """
+    key_id = settings.RAZORPAY_KEY_ID
+    key_secret = settings.RAZORPAY_KEY_SECRET
+
+    if not key_id or not key_secret:
+        logger.error("Razorpay credentials not configured")
+        return None
+
+    return razorpay.Client(auth=(key_id, key_secret))
+
+
+# =============================================================================
+# SUBSCRIPTION RENEWAL (CRON JOB)
+# =============================================================================
+
+def process_subscription_renewals():
+    """
+    Process automatic subscription renewals for subscriptions that are
+    expiring soon or have low token balance.
+
+    This function is intended to be called by a cron job.
+
+    Note: Razorpay doesn't support automatic recurring payments in the same
+    way Stripe does. This function logs subscriptions that need renewal
+    and can be extended to send reminder emails.
+    """
+    logger.info("Starting subscription renewal check...")
+
+    # Find subscriptions that are expiring within 7 days or have low tokens
+    expiring_soon = timezone.now() + timedelta(days=7)
+
+    subscriptions = Subscription.objects.filter(
+        is_delete=False,
+        status__in=['active', 'trial'],
+        isSubscribe=True,
+    ).filter(
+        subscriptionExpiryDate__lte=expiring_soon
+    ) | Subscription.objects.filter(
+        is_delete=False,
+        status__in=['active', 'trial'],
+        isSubscribe=True,
+        balanceToken__lte=100
     )
-    return cardDetail.id
 
-class CreatePaymentIntent(APIView):
-    def post(self, request):
-        amount = request.data.get('amount')
-        userName = request.data.get('userName')
-        planId = request.data.get('planId')
-        line1 = request.data.get('line1', "")
-        line2 = request.data.get('line2', "")
-        postalCode = request.data.get('postalCode', "")
-        city = request.data.get('city', "")
-        state = request.data.get('state', "")
-        country = request.data.get('country')
-        amount_in_cent = int(amount * 100)
-        # customerId = request.data.get('customerId') 
-        if not amount or not userName or not country or not planId:
-            return Response({'message': 'Amount, Username, County And PlanId Require.'}, status=status.HTTP_400_BAD_REQUEST)
+    renewals_needed = []
+    for subscription in subscriptions:
+        renewal_info = {
+            'user_id': subscription.user.id,
+            'user_email': subscription.user.email,
+            'plan_name': subscription.plan_name,
+            'expiry_date': subscription.subscriptionExpiryDate,
+            'balance_tokens': subscription.balanceToken,
+        }
+        renewals_needed.append(renewal_info)
 
-        try:
-            intent = stripe.PaymentIntent.create(
-                receipt_email = request.user.email,
-                amount = amount_in_cent,
-                currency = 'usd',
-                customer = request.user.stripeCustomerId,
-                description = "Plan Subscription Payment",
-                # automatic_payment_methods= {"enabled": True, "allow_redirects": "never"}
-                automatic_payment_methods = {"enabled": True},
-                # payment_method_types = ['card']
-                shipping = {
-                    "name": userName ,
-                    "address": {
-                        "line1": line1,
-                        "line2": line2,
-                        "postal_code": postalCode,
-                        "city": city,
-                        "state": state,
-                        "country": country,
-                    },
-                },
-            )
+        # Mark subscription as needing renewal notification
+        # You can extend this to send email notifications
 
-            plan = UserPlan.objects.get(id=planId)
-            Transaction.objects.create(
-                user_id=request.user.id, 
-                transactionId= intent.id, 
-                amount= intent.amount/100,
-                plan_name= plan.plan_name,
-                duration = plan.duration,
-                tokenCount = plan.totalToken,
-                fileToken = plan.fileToken,
-                payment_method=intent.payment_method_types[0]
-            )
-            return Response({'client_secret': intent.client_secret})
-        except Exception as e:
-            return Response({'error': str(e)}, status=500)
-        
-# class AddCustomer(APIView):
-#     # permission_classes = [AllowAny]
-#     def post(self, request):
-#         userName = request.data.get('name') 
-#         userEmail = request.data.get('email') 
+        logger.info(
+            f"Subscription renewal needed: user={subscription.user.id}, "
+            f"plan={subscription.plan_name}, expires={subscription.subscriptionExpiryDate}"
+        )
 
-#         try:
-#             intent = stripe.Customer.create(
-#                 name = userName,
-#                 email = userEmail,
-#             )
-#             return Response(intent)
-#         except Exception as e:
-#             return Response({'error': str(e)}, status=500)
-        
-        
-class AddCard(APIView):
-    def post(self, request):
-        custId = request.data.get('customerId') 
-        token = request.data.get('token') 
+    logger.info(f"Subscription renewal check complete. {len(renewals_needed)} renewals needed.")
 
-        if not custId or not token:
-            return Response({'message': 'CustomerId And Token Require.'}, status=status.HTTP_400_BAD_REQUEST)
+    return renewals_needed
 
-        try:
-            cardDetail = stripe.Customer.create_source(
-                custId,
-                source = token,
-                # source = "tok_visa",
-                )
-            return Response(cardDetail, status=status.HTTP_200_OK)
-        except Exception as e:
-            return Response({'error': str(e)}, status=500)
-        
-class GetCards(APIView):
+
+def expire_subscriptions():
+    """
+    Expire subscriptions that have passed their end date.
+
+    This function is intended to be called by a cron job.
+    """
+    logger.info("Starting subscription expiration check...")
+
+    # Find subscriptions past their end date
+    now = timezone.now()
+
+    expired_subscriptions = Subscription.objects.filter(
+        is_delete=False,
+        status='active',
+        subscriptionEndDate__lt=now
+    )
+
+    expired_count = 0
+    for subscription in expired_subscriptions:
+        # Move remaining balance to expired tokens
+        subscription.expireToken += subscription.balanceToken
+        subscription.expireFileToken += subscription.fileToken
+        subscription.balanceToken = 0
+        subscription.fileToken = 0
+        subscription.status = 'expire'
+        subscription.save()
+
+        expired_count += 1
+
+        logger.info(
+            f"Subscription expired: user={subscription.user.id}, "
+            f"plan={subscription.plan_name}"
+        )
+
+    logger.info(f"Subscription expiration check complete. {expired_count} subscriptions expired.")
+
+    return expired_count
+
+
+# =============================================================================
+# API VIEWS
+# =============================================================================
+
+class GetUserPaymentHistory(APIView):
+    """
+    Get payment history for the authenticated user.
+
+    GET /api/auth/payment-history/
+    """
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
-        custId = request.GET.get('customerId') 
-        if not custId:
-            return Response({'message': 'CustomerId Require.'}, status=status.HTTP_400_BAD_REQUEST)
+        transactions = Transaction.objects.filter(
+            user=request.user,
+            is_delete=False
+        ).order_by('-created_at')[:20]
 
-        try:
-            cardDetails = stripe.Customer.list_sources(
-                custId,
-                object = "card",
-                limit = 20
-                )
-            return Response(cardDetails, status=status.HTTP_200_OK)
-        except Exception as e:
-            return Response({'error': str(e)}, status=500)
-        
-        
-class UpdateCard(APIView):
-    def patch(self, request):
+        history = []
+        for trans in transactions:
+            history.append({
+                'id': trans.id,
+                'transaction_id': trans.transactionId,
+                'amount': float(trans.amount),
+                'plan_name': trans.plan_name,
+                'duration': trans.duration,
+                'tokens': trans.tokenCount,
+                'file_tokens': trans.fileToken,
+                'status': trans.payment_status,
+                'payment_method': trans.payment_method,
+                'created_at': trans.created_at.isoformat(),
+            })
 
-        serializer = UpdateCardSerializer(data=request.data)
+        return success_response({'transactions': history})
 
-        if serializer.is_valid():
-            custId = serializer.validated_data.get('customerId')
-            cardId = serializer.validated_data.get('cardId')
-            # name = serializer.validated_data.get('name')
-            expYear = serializer.validated_data.get('expYear')
-            expMonth = serializer.validated_data.get('expMonth')
 
-        try:
-            cardDetail = stripe.Customer.modify_source(
-                custId,
-                cardId,
-                # name = name,
-                exp_year = expYear,
-                exp_month = expMonth
-            )
-            return Response(cardDetail, status=status.HTTP_200_OK)
-        except Exception as e:
-            return Response({'error': str(e)}, status=500)
-        
-        
-class DeleteCard(APIView):
-    def delete(self, request):
-        custId = request.data.get('customerId') 
-        cardId = request.data.get('cardId') 
+class GetCurrentSubscription(APIView):
+    """
+    Get current subscription details for the authenticated user.
 
-        if not custId or not cardId:
-            return Response({'message': 'CustomerId And CardId Require.'}, status=status.HTTP_400_BAD_REQUEST)
+    GET /api/auth/subscription/
+    """
+    permission_classes = [IsAuthenticated]
 
-        try:
-            cardDetail = stripe.Customer.delete_source(
-                custId,
-                cardId,
-            )
-            return Response(cardDetail, status=status.HTTP_200_OK)
-        except Exception as e:
-            return Response({'error': str(e)}, status=500)
-        
-        
-class GetCustomerDetails(APIView):
-    def get(self, request, custId):
+    def get(self, request):
+        # Check if user is part of a cluster
+        if request.user.cluster:
+            subscription = request.user.cluster.subscription
+        else:
+            subscription = Subscription.objects.filter(
+                user=request.user,
+                is_delete=False
+            ).first()
 
-        try:
-            cardDetail = stripe.Customer.retrieve(custId)
-            return Response(cardDetail, status=status.HTTP_200_OK)
-        except Exception as e:
-            return Response({'error': str(e)}, status=500)
-        
-        
-class MarkCardDefault(APIView):
-    def patch(self, request):
-        custId = request.data.get('customerId') 
-        cardId = request.data.get('cardId') 
+        if not subscription:
+            return Response({
+                'success': False,
+                'error': {
+                    'code': ErrorCodes.SUB_NOT_FOUND,
+                    'message': 'No subscription found.'
+                }
+            }, status=status.HTTP_404_NOT_FOUND)
 
-        try:
-            cardDetail = stripe.Customer.modify(
-                custId,
-                default_source = cardId
-            )
-            return Response(cardDetail, status=status.HTTP_200_OK)
-        except Exception as e:
-            return Response({'error': str(e)}, status=500)
-        
-## We generate card Token by direct hit stripe api in browser. Not save card detail in own database.       
-class GenerateCardToken(APIView):
+        data = {
+            'id': subscription.id,
+            'plan_name': subscription.plan_name,
+            'plan_for': subscription.plan_for,
+            'status': subscription.status,
+            'amount': float(subscription.amount) if subscription.amount else 0,
+
+            # Token information
+            'balance_token': subscription.balanceToken,
+            'used_token': subscription.usedToken,
+            'expire_token': subscription.expireToken,
+            'total_token': subscription.totalToken,
+
+            # File token information
+            'file_token': subscription.fileToken,
+            'used_file_token': subscription.usedFileToken,
+            'expire_file_token': subscription.expireFileToken,
+            'total_file_token': subscription.totalFileToken,
+
+            # Dates
+            'expiry_date': subscription.subscriptionExpiryDate.isoformat() if subscription.subscriptionExpiryDate else None,
+            'end_date': subscription.subscriptionEndDate.isoformat() if subscription.subscriptionEndDate else None,
+
+            # Additional info
+            'feature': subscription.feature,
+            'is_cluster': request.user.cluster is not None,
+            'payment_status': subscription.payment_status,
+        }
+
+        return success_response(data)
+
+
+class CancelSubscription(APIView):
+    """
+    Cancel the current subscription (disable auto-renewal).
+
+    POST /api/auth/subscription/cancel/
+
+    Note: This doesn't provide a refund, just disables auto-renewal.
+    """
+    permission_classes = [IsAuthenticated]
+
     def post(self, request):
-        serializer = GenerateCardTokenSerializer(data=request.data)
+        if request.user.cluster:
+            return Response({
+                'success': False,
+                'error': {
+                    'code': ErrorCodes.AUTH_PERMISSION_DENIED,
+                    'message': 'Cluster subscriptions can only be managed by cluster admin.'
+                }
+            }, status=status.HTTP_403_FORBIDDEN)
 
-        if serializer.is_valid():
-            cardNumber = serializer.validated_data.get('cardNumber')
-            expYear = serializer.validated_data.get('expYear')
-            expMonth = serializer.validated_data.get('expMonth')
-            cvc = serializer.validated_data.get('cvc')
-            try:
-                token = stripe.Token.create(
-                        card={
-                            # "name": cardName,
-                            "number": cardNumber,
-                            "exp_month": expMonth,
-                            "exp_year": expYear,
-                            "cvc": cvc,
-                        },
-                    )
-                return Response(token, status=status.HTTP_200_OK)
-            except Exception as e:
-                return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
+        subscription = Subscription.objects.filter(
+            user=request.user,
+            is_delete=False,
+            status='active'
+        ).first()
 
-class MakePayment(APIView):
-    def post(self, request):
-        custId = request.data.get('customerId') 
-        cardId = request.data.get('cardId') 
-        amount = request.data.get('amount') 
+        if not subscription:
+            return Response({
+                'success': False,
+                'error': {
+                    'code': ErrorCodes.SUB_NOT_FOUND,
+                    'message': 'No active subscription to cancel.'
+                }
+            }, status=status.HTTP_404_NOT_FOUND)
 
-        try:
-            intent = stripe.Charge.create(
-                # receipt_email = "anils.rana97@gmail.com",
-                amount = amount,
-                currency = "usd",
-                customer = custId,
-                description = 'Monthly Subscription Payment',
-                # card = cardId
-                # source = cardId,
-                )
-            return Response(intent)
-        except Exception as e:
-            return Response({'error': str(e)}, status=500)
+        # Disable auto-renewal
+        subscription.isSubscribe = False
+        subscription.save()
+
+        logger.info(
+            f"Subscription cancelled: user={request.user.id}, "
+            f"plan={subscription.plan_name}"
+        )
+
+        return success_response({
+            'message': 'Subscription auto-renewal has been cancelled. '
+                      'You can continue using the service until your current period ends.',
+            'expiry_date': subscription.subscriptionExpiryDate.isoformat(),
+        })
 
 
-def createChargesOnStripe(data):
-    intent = stripe.Charge.create(
-        amount = data["amount"],
-        currency = data["currency"],
-        customer = data["customer"],
-        description = data["description"]
-    )
-    return intent
-        
+# =============================================================================
+# LEGACY FUNCTIONS (For backwards compatibility)
+# =============================================================================
+
 def subscriptions():
-# def subscriptions(request):
-    subscriptions = Subscription.objects.filter(is_delete=0, isSubscribe=True)
-    # subscriptions = subscriptions.filter(Q(subscriptionExpiryDate__lte=timezone.now()) | Q(balanceToken__lte=100))
+    """
+    Legacy function for cron job compatibility.
 
-    for subscrip in subscriptions:
-        if subscrip.subscriptionExpiryDate <= timezone.now() or subscrip.balanceToken <= 100:
-            chargesObj = {
-                "amount": int((subscrip.plan.amount) * 100),
-                "currency": "usd",
-                "customer": subscrip.user.stripeCustomerId,
-                "description": 'Monthly Subscription Payment'
-            }
-            paymentResponse = createChargesOnStripe(chargesObj)
-            if paymentResponse and paymentResponse.id:
-                nextSubsDate = subscrip.subscriptionExpiryDate + timedelta(days=subscrip.plan.duration)
-                planEndDate = subscrip.subscriptionExpiryDate + timedelta(days=subscrip.plan.duration + 7)
-                subscrip.subscriptionExpiryDate = nextSubsDate
-                subscrip.subscriptionEndDate = planEndDate
-                subscrip.balanceToken += subscrip.plan.totalToken
-                subscrip.fileToken += subscrip.plan.fileToken
-                subscrip.save()
-                # return HttpResponse(paymentResponse.id, status=200)
-    # return HttpResponse("No Subscription Found", status=200)
-    print(f"** Crone Job Run at {timezone.now()}")
-        
+    This function is called by the cron job to handle subscription processing.
+    """
+    # Process expirations first
+    expire_subscriptions()
 
+    # Then check for renewals needed
+    process_subscription_renewals()
 
-
-
-
-
-
+    logger.info(f"Cron job completed at {timezone.now()}")

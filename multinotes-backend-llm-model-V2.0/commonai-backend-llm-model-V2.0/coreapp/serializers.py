@@ -1,13 +1,20 @@
 from rest_framework import serializers
-from .models import (LLM, PromptResponse, Prompt, NoteBook, 
-                     Folder, Document, LLM_Tokens, LLM_Ratings, 
-                     UserLLM, UserContent, StorageUsage, Share, 
+from .models import (LLM, PromptResponse, Prompt, NoteBook,
+                     Folder, Document, LLM_Tokens, LLM_Ratings,
+                     UserLLM, UserContent, StorageUsage, Share,
                      GroupResponse, AiProcess
                     )
 from planandsubscription.models import Category
 from authentication.models import CustomUser
 from planandsubscription.models import Transaction, Subscription
 from django.db.models import Sum
+from backend.validators import (
+    sanitize_text,
+    sanitize_html,
+    validate_no_script_injection,
+    validate_prompt_text,
+    validate_rating,
+)
 
 class GetCustomUserSerializer(serializers.ModelSerializer):
     class Meta:
@@ -318,39 +325,103 @@ class FolderListSerializer(serializers.ModelSerializer):
     
 
 class TextToTextSerializer(serializers.Serializer):
-    prompt = serializers.CharField()
-    model = serializers.CharField()
-    source = serializers.CharField()
-    useFor = serializers.CharField()
+    """Serializer for text-to-text AI generation with validation."""
+    prompt = serializers.CharField(max_length=10000)
+    model = serializers.CharField(max_length=100)
+    source = serializers.CharField(max_length=50)
+    useFor = serializers.CharField(max_length=50)
     image = serializers.ImageField(required=False)
     category = serializers.IntegerField()
-    promptWriter = serializers.BooleanField(required=False)
+    promptWriter = serializers.BooleanField(required=False, default=False)
+
+    def validate_prompt(self, value):
+        """Validate and sanitize prompt text."""
+        return validate_prompt_text(value)
+
+    def validate_source(self, value):
+        """Validate source is valid."""
+        valid_sources = ['1', '2', '3', '4', 1, 2, 3, 4]  # TogetherAI, Gemini, OpenAI
+        if value not in valid_sources:
+            raise serializers.ValidationError("Invalid LLM source.")
+        return value
+
+    def validate_category(self, value):
+        """Validate category exists."""
+        if value <= 0:
+            raise serializers.ValidationError("Invalid category ID.")
+        return value
 
 
 class PictureToTextSerializer(serializers.Serializer):
+    """Serializer for image-to-text AI generation with validation."""
     image = serializers.ImageField()
-    # image = serializers.FileField()
-    # prompt = serializers.CharField(required=False)
-    prompt = serializers.CharField()
-    model = serializers.CharField()
+    prompt = serializers.CharField(max_length=10000)
+    model = serializers.CharField(max_length=100)
     category = serializers.IntegerField()
-    # mainCategory = serializers.IntegerField()
-    source = serializers.CharField()
-    useFor = serializers.CharField()
+    source = serializers.CharField(max_length=50)
+    useFor = serializers.CharField(max_length=50)
+
+    def validate_prompt(self, value):
+        """Validate and sanitize prompt text."""
+        if value:
+            return validate_prompt_text(value)
+        return value
+
+    def validate_category(self, value):
+        """Validate category exists."""
+        if value <= 0:
+            raise serializers.ValidationError("Invalid category ID.")
+        return value
+
 
 class TextToImageSerializer(serializers.Serializer):
-    prompt = serializers.CharField()
-    model = serializers.CharField()
+    """Serializer for text-to-image AI generation with validation."""
+    prompt = serializers.CharField(max_length=5000)
+    model = serializers.CharField(max_length=100)
     category = serializers.IntegerField()
-    source = serializers.CharField()
-    useFor = serializers.CharField()
+    source = serializers.CharField(max_length=50)
+    useFor = serializers.CharField(max_length=50)
+
+    def validate_prompt(self, value):
+        """Validate and sanitize prompt text."""
+        return validate_prompt_text(value)
+
+    def validate_category(self, value):
+        """Validate category exists."""
+        if value <= 0:
+            raise serializers.ValidationError("Invalid category ID.")
+        return value
+
 
 class SpeechToTextSerializer(serializers.Serializer):
+    """Serializer for speech-to-text AI generation with validation."""
     file = serializers.FileField()
-    # prompt = serializers.CharField(required=False)
-    # prompt = serializers.CharField()
-    model = serializers.CharField()
+    model = serializers.CharField(max_length=100)
     category = serializers.IntegerField()
+
+    def validate_file(self, value):
+        """Validate audio file."""
+        allowed_types = [
+            'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/wave',
+            'audio/x-wav', 'audio/ogg', 'audio/webm', 'audio/m4a'
+        ]
+        max_size = 50 * 1024 * 1024  # 50MB
+
+        if hasattr(value, 'content_type') and value.content_type not in allowed_types:
+            raise serializers.ValidationError(
+                "Invalid audio format. Allowed: MP3, WAV, OGG, WebM, M4A."
+            )
+
+        if value.size > max_size:
+            raise serializers.ValidationError("Audio file cannot exceed 50MB.")
+
+        return value
+
+    def validate_category(self, value):
+        """Validate category exists."""
+        if value <= 0:
+            raise serializers.ValidationError("Invalid category ID.")
+        return value
 
 class PromptSerializer(serializers.ModelSerializer):
     category = serializers.CharField(source='category.name')
@@ -444,9 +515,24 @@ class PerDayTokenSerializer(serializers.ModelSerializer):
 
 
 class LlmRatingSerializer(serializers.ModelSerializer):
+    """Serializer for LLM ratings with validation."""
+
     class Meta:
         model = LLM_Ratings
         fields = '__all__'
+
+    def validate_rating(self, value):
+        """Validate rating is between 1 and 5."""
+        return validate_rating(value)
+
+    def validate_feedback(self, value):
+        """Sanitize feedback text."""
+        if value:
+            value = sanitize_text(value)
+            if len(value) > 1000:
+                raise serializers.ValidationError("Feedback cannot exceed 1000 characters.")
+        return value
+
 
 class LlmRatingOutputSerializer(serializers.ModelSerializer):
     user = GetCustomUserSerializer()
