@@ -4,6 +4,7 @@ import { useSelector } from 'react-redux';
 // Layout
 import MainLayout from './components/layout/MainLayout';
 import AuthLayout from './components/layout/AuthLayout';
+import AdminLayout from './components/layout/AdminLayout';
 
 // Auth Pages
 import Login from './pages/auth/Login';
@@ -20,6 +21,10 @@ import TokenDashboard from './pages/dashboard/TokenDashboard';
 import AIChat from './pages/ai/AIChat';
 import PromptTemplates from './pages/ai/PromptTemplates';
 import ModelComparison from './pages/ai/ModelComparison';
+import BatchProcessing from './pages/ai/BatchProcessing';
+import ScheduledGenerations from './pages/ai/ScheduledGenerations';
+import PromptChaining from './pages/ai/PromptChaining';
+import AnalyticsDashboard from './pages/ai/AnalyticsDashboard';
 
 // Document Pages
 import Documents from './pages/documents/Documents';
@@ -31,12 +36,33 @@ import Settings from './pages/settings/Settings';
 import Profile from './pages/settings/Profile';
 import Subscription from './pages/settings/Subscription';
 
+// Admin Pages
+import AdminDashboard from './pages/admin/AdminDashboard';
+import UserManagement from './pages/admin/UserManagement';
+import SystemHealth from './pages/admin/SystemHealth';
+import Analytics from './pages/admin/Analytics';
+
 // Protected Route Component
 const ProtectedRoute = ({ children }) => {
   const { isAuthenticated } = useSelector((state) => state.auth);
 
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
+  }
+
+  return children;
+};
+
+// Admin Route Component (protected for admin users only)
+const AdminRoute = ({ children }) => {
+  const { isAuthenticated, user } = useSelector((state) => state.auth);
+
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace />;
+  }
+
+  if (user?.role !== 'admin') {
+    return <Navigate to="/dashboard" replace />;
   }
 
   return children;
@@ -75,6 +101,10 @@ function App() {
         <Route path="/ai/chat/:conversationId" element={<AIChat />} />
         <Route path="/ai/templates" element={<PromptTemplates />} />
         <Route path="/ai/compare" element={<ModelComparison />} />
+        <Route path="/ai/batch" element={<BatchProcessing />} />
+        <Route path="/ai/schedule" element={<ScheduledGenerations />} />
+        <Route path="/ai/chain" element={<PromptChaining />} />
+        <Route path="/analytics" element={<AnalyticsDashboard />} />
 
         {/* Document Routes */}
         <Route path="/documents" element={<Documents />} />
@@ -85,6 +115,14 @@ function App() {
         <Route path="/settings" element={<Settings />} />
         <Route path="/settings/profile" element={<Profile />} />
         <Route path="/settings/subscription" element={<Subscription />} />
+      </Route>
+
+      {/* Admin Routes (Protected for admin users only) */}
+      <Route element={<AdminRoute><AdminLayout /></AdminRoute>}>
+        <Route path="/admin" element={<AdminDashboard />} />
+        <Route path="/admin/users" element={<UserManagement />} />
+        <Route path="/admin/system" element={<SystemHealth />} />
+        <Route path="/admin/analytics" element={<Analytics />} />
       </Route>
 
       {/* Redirect root to dashboard or login */}
