@@ -70,9 +70,14 @@ export const logout = createAsyncThunk(
 
 export const fetchUserProfile = createAsyncThunk(
   'auth/fetchProfile',
-  async (_, { rejectWithValue }) => {
+  async (userId, { getState, rejectWithValue }) => {
     try {
-      const response = await authService.getProfile();
+      // Use provided userId or get from state
+      const id = userId || getState().auth.user?.id;
+      if (!id) {
+        return rejectWithValue('No user ID available');
+      }
+      const response = await authService.getProfile(id);
       return response;
     } catch (error) {
       return rejectWithValue(error.response?.data?.message || 'Failed to fetch profile');
