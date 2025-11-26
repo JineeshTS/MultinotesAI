@@ -1,344 +1,510 @@
 """
-Additional analytics and feature models for MultinotesAI.
+Analytics and metrics models for MultinotesAI.
 
-These models support:
-- User analytics tracking
-- Prompt templates library
-- Prompt suggestions
-- Product metrics
-- User onboarding
+This module provides:
+- UserAnalytics model for tracking user behavior
+- PromptTemplate model for reusable prompts
+- SystemMetrics model for performance tracking
+- APIUsageLog for API usage tracking
 """
 
 from django.db import models
+from django.conf import settings
 from django.utils import timezone
-from authentication.models import CustomUser
+from django.core.validators import MinValueValidator, MaxValueValidator
+import json
 
+
+# =============================================================================
+# User Analytics Model
+# =============================================================================
 
 class UserAnalytics(models.Model):
     """
-    Tracks user engagement and usage analytics.
-    Used for retention analysis and product insights.
+    Track daily user analytics and engagement metrics.
+
+    Stores aggregated daily statistics per user for:
+    - Content creation
+    - AI generation usage
+    - Feature engagement
+    - Session data
     """
-    user = models.OneToOneField(
-        CustomUser,
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name='analytics'
     )
+    date = models.DateField(default=timezone.now)
 
-    # Engagement metrics
-    total_sessions = models.IntegerField(default=0)
-    total_prompts = models.IntegerField(default=0)
-    total_generations = models.IntegerField(default=0)
-    total_tokens_used = models.BigIntegerField(default=0)
+    # Content metrics
+    notes_created = models.PositiveIntegerField(default=0)
+    notes_edited = models.PositiveIntegerField(default=0)
+    notes_deleted = models.PositiveIntegerField(default=0)
+    folders_created = models.PositiveIntegerField(default=0)
 
-    # Time metrics
-    total_time_spent = models.IntegerField(default=0)  # seconds
-    average_session_duration = models.IntegerField(default=0)  # seconds
+    # AI usage metrics
+    ai_text_generations = models.PositiveIntegerField(default=0)
+    ai_image_generations = models.PositiveIntegerField(default=0)
+    ai_tokens_used = models.PositiveIntegerField(default=0)
+    ai_requests_streamed = models.PositiveIntegerField(default=0)
 
-    # Activity tracking
-    last_active = models.DateTimeField(null=True, blank=True)
-    last_generation = models.DateTimeField(null=True, blank=True)
-    last_login = models.DateTimeField(null=True, blank=True)
+    # Session metrics
+    sessions_count = models.PositiveIntegerField(default=0)
+    total_session_duration = models.PositiveIntegerField(default=0)  # seconds
+    pages_viewed = models.PositiveIntegerField(default=0)
 
-    # Engagement scoring
-    engagement_score = models.FloatField(default=0.0)
-    retention_risk = models.CharField(
-        max_length=20,
-        choices=[
-            ('low', 'Low Risk'),
-            ('medium', 'Medium Risk'),
-            ('high', 'High Risk'),
-        ],
-        default='low'
-    )
+    # Feature usage (JSON for flexibility)
+    feature_usage = models.JSONField(default=dict, blank=True)
 
-    # Feature usage
-    features_used = models.JSONField(default=dict)
-    favorite_models = models.JSONField(default=list)
+    # Sharing metrics
+    content_shared = models.PositiveIntegerField(default=0)
+    shared_views_received = models.PositiveIntegerField(default=0)
 
+    # API metrics
+    api_calls = models.PositiveIntegerField(default=0)
+    api_errors = models.PositiveIntegerField(default=0)
+
+    # Storage metrics
+    storage_used_bytes = models.BigIntegerField(default=0)
+    files_uploaded = models.PositiveIntegerField(default=0)
+
+    # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        db_table = 'user_analytics'
         verbose_name = 'User Analytics'
         verbose_name_plural = 'User Analytics'
+        unique_together = ['user', 'date']
         indexes = [
-            models.Index(fields=['user']),
-            models.Index(fields=['last_active']),
-            models.Index(fields=['engagement_score']),
-            models.Index(fields=['retention_risk']),
+            models.Index(fields=['user', 'date']),
+            models.Index(fields=['date']),
+            models.Index(fields=['user', '-ai_tokens_used']),
         ]
 
     def __str__(self):
-        return f"Analytics for {self.user.email}"
+        return f"Analytics for {self.user} on {self.date}"
 
+    @classmethod
+    def get_or_create_today(cls, user):
+        """Get or create today's analytics record for user."""
+        today = timezone.now().date()
+        obj, created = cls.objects.get_or_create(
+            user=user,
+            date=today,
+            defaults={}
+        )
+        return obj
+
+    def increment(self, field_name, amount=1):
+        """Safely increment a field value."""
+        current = getattr(self, field_name, 0) or 0
+        setattr(self, field_name, current + amount)
+        self.save(update_fields=[field_name, 'updated_at'])
+
+    def track_feature(self, feature_name):
+        """Track usage of a specific feature."""
+        if self.feature_usage is None:
+            self.feature_usage = {}
+        self.feature_usage[feature_name] = self.feature_usage.get(feature_name, 0) + 1
+        self.save(update_fields=['feature_usage', 'updated_at'])
+
+
+# =============================================================================
+# Prompt Template Model
+# =============================================================================
 
 class PromptTemplate(models.Model):
-    """Pre-built prompt templates for common use cases."""
+    """
+    Reusable prompt templates for AI generation.
+
+    Supports:
+    - System prompts
+    - User prompts with variables
+    - Template categories
+    - Version history
+    """
+
     CATEGORY_CHOICES = [
+        ('general', 'General'),
         ('writing', 'Writing'),
         ('coding', 'Coding'),
         ('analysis', 'Analysis'),
         ('creative', 'Creative'),
         ('business', 'Business'),
         ('education', 'Education'),
-        ('marketing', 'Marketing'),
-        ('other', 'Other'),
+        ('custom', 'Custom'),
     ]
 
-    title = models.CharField(max_length=255)
+    TYPE_CHOICES = [
+        ('system', 'System Prompt'),
+        ('user', 'User Prompt'),
+        ('combined', 'Combined'),
+    ]
+
+    # Basic info
+    name = models.CharField(max_length=255)
+    slug = models.SlugField(max_length=255, unique=True)
     description = models.TextField(blank=True)
-    template_text = models.TextField()
 
-    category = models.CharField(max_length=50, choices=CATEGORY_CHOICES, default='other')
-    tags = models.JSONField(default=list)
-    variables = models.JSONField(default=list)
+    # Template content
+    template_type = models.CharField(
+        max_length=20,
+        choices=TYPE_CHOICES,
+        default='user'
+    )
+    system_prompt = models.TextField(blank=True)
+    user_prompt = models.TextField()
 
-    created_by = models.ForeignKey(
-        CustomUser,
+    # Classification
+    category = models.CharField(
+        max_length=50,
+        choices=CATEGORY_CHOICES,
+        default='general'
+    )
+    tags = models.JSONField(default=list, blank=True)
+
+    # Variables (JSON list of variable names)
+    variables = models.JSONField(default=list, blank=True)
+    variable_defaults = models.JSONField(default=dict, blank=True)
+
+    # Ownership
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='prompt_templates',
+        null=True,
+        blank=True
+    )
+    is_public = models.BooleanField(default=False)
+    is_system = models.BooleanField(default=False)
+
+    # Usage stats
+    usage_count = models.PositiveIntegerField(default=0)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+
+    # LLM configuration
+    recommended_model = models.CharField(max_length=100, blank=True)
+    temperature = models.FloatField(
+        default=0.7,
+        validators=[MinValueValidator(0.0), MaxValueValidator(2.0)]
+    )
+    max_tokens = models.PositiveIntegerField(default=1000)
+
+    # Versioning
+    version = models.PositiveIntegerField(default=1)
+    parent_template = models.ForeignKey(
+        'self',
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='prompt_templates'
+        related_name='versions'
     )
-    is_system = models.BooleanField(default=False)
-    is_public = models.BooleanField(default=True)
 
-    usage_count = models.IntegerField(default=0)
-    rating_sum = models.IntegerField(default=0)
-    rating_count = models.IntegerField(default=0)
-
-    recommended_model = models.CharField(max_length=100, blank=True)
+    # Status
     is_active = models.BooleanField(default=True)
     is_delete = models.BooleanField(default=False)
 
+    # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ['-usage_count', '-created_at']
+        db_table = 'prompt_templates'
+        verbose_name = 'Prompt Template'
+        verbose_name_plural = 'Prompt Templates'
         indexes = [
+            models.Index(fields=['slug']),
             models.Index(fields=['category']),
-            models.Index(fields=['is_system', 'is_public']),
-            models.Index(fields=['usage_count']),
-            models.Index(fields=['created_by']),
+            models.Index(fields=['user', 'is_active']),
+            models.Index(fields=['is_public', 'is_active']),
         ]
 
     def __str__(self):
-        return self.title
+        return f"{self.name} (v{self.version})"
+
+    def render(self, context=None):
+        """
+        Render the template with provided context.
+
+        Args:
+            context: Dict of variable values
+
+        Returns:
+            Dict with rendered system_prompt and user_prompt
+        """
+        context = context or {}
+
+        # Merge with defaults
+        full_context = {**self.variable_defaults, **context}
+
+        # Simple string replacement for variables
+        rendered_system = self.system_prompt
+        rendered_user = self.user_prompt
+
+        for var_name in self.variables:
+            placeholder = f"{{{{{var_name}}}}}"  # {{var_name}}
+            value = str(full_context.get(var_name, ''))
+            rendered_system = rendered_system.replace(placeholder, value)
+            rendered_user = rendered_user.replace(placeholder, value)
+
+        return {
+            'system_prompt': rendered_system,
+            'user_prompt': rendered_user,
+        }
+
+    def record_usage(self):
+        """Record template usage."""
+        self.usage_count += 1
+        self.last_used_at = timezone.now()
+        self.save(update_fields=['usage_count', 'last_used_at'])
+
+    def create_version(self, **updates):
+        """Create a new version of this template."""
+        new_template = PromptTemplate.objects.create(
+            name=self.name,
+            slug=f"{self.slug}-v{self.version + 1}",
+            description=self.description,
+            template_type=self.template_type,
+            system_prompt=updates.get('system_prompt', self.system_prompt),
+            user_prompt=updates.get('user_prompt', self.user_prompt),
+            category=self.category,
+            tags=self.tags,
+            variables=self.variables,
+            variable_defaults=self.variable_defaults,
+            user=self.user,
+            is_public=self.is_public,
+            recommended_model=self.recommended_model,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            version=self.version + 1,
+            parent_template=self,
+        )
+        return new_template
 
 
-class PromptSuggestion(models.Model):
-    """AI-generated or curated prompt suggestions."""
-    text = models.TextField()
-    category = models.CharField(max_length=50, blank=True)
+# =============================================================================
+# System Metrics Model
+# =============================================================================
 
-    trigger_keywords = models.JSONField(default=list)
-    context_type = models.CharField(
-        max_length=50,
-        choices=[
-            ('general', 'General'),
-            ('continuation', 'Continuation'),
-            ('refinement', 'Refinement'),
-            ('alternative', 'Alternative'),
-        ],
-        default='general'
+class SystemMetrics(models.Model):
+    """
+    Track system-wide performance metrics.
+
+    Used for:
+    - API response times
+    - Error rates
+    - Resource utilization
+    - Provider health
+    """
+
+    METRIC_TYPES = [
+        ('response_time', 'Response Time'),
+        ('error_rate', 'Error Rate'),
+        ('throughput', 'Throughput'),
+        ('availability', 'Availability'),
+        ('resource', 'Resource Usage'),
+        ('custom', 'Custom'),
+    ]
+
+    # Metric identification
+    metric_type = models.CharField(max_length=50, choices=METRIC_TYPES)
+    metric_name = models.CharField(max_length=255)
+    component = models.CharField(max_length=100, blank=True)  # e.g., 'openai', 'database'
+
+    # Values
+    value = models.FloatField()
+    unit = models.CharField(max_length=50, blank=True)  # e.g., 'ms', 'percent', 'count'
+
+    # Context
+    tags = models.JSONField(default=dict, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    # Timestamp
+    recorded_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        db_table = 'system_metrics'
+        verbose_name = 'System Metric'
+        verbose_name_plural = 'System Metrics'
+        indexes = [
+            models.Index(fields=['metric_type', 'recorded_at']),
+            models.Index(fields=['metric_name', 'recorded_at']),
+            models.Index(fields=['component', 'recorded_at']),
+            models.Index(fields=['-recorded_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.metric_name}: {self.value}{self.unit} at {self.recorded_at}"
+
+    @classmethod
+    def record(cls, metric_type, metric_name, value, **kwargs):
+        """
+        Record a new metric.
+
+        Args:
+            metric_type: Type of metric
+            metric_name: Name of the metric
+            value: Metric value
+            **kwargs: Additional fields (component, unit, tags, metadata)
+        """
+        return cls.objects.create(
+            metric_type=metric_type,
+            metric_name=metric_name,
+            value=value,
+            component=kwargs.get('component', ''),
+            unit=kwargs.get('unit', ''),
+            tags=kwargs.get('tags', {}),
+            metadata=kwargs.get('metadata', {}),
+        )
+
+
+# =============================================================================
+# API Usage Log Model
+# =============================================================================
+
+class APIUsageLog(models.Model):
+    """
+    Detailed log of API usage for billing and analytics.
+
+    Tracks:
+    - Individual API calls
+    - Token consumption
+    - Costs
+    - Response times
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='api_usage_logs'
     )
 
-    for_new_users = models.BooleanField(default=False)
-    for_category = models.CharField(max_length=50, blank=True)
+    # Request info
+    endpoint = models.CharField(max_length=255)
+    method = models.CharField(max_length=10)
+    request_id = models.CharField(max_length=100, blank=True)
 
-    is_active = models.BooleanField(default=True)
-    priority = models.IntegerField(default=0)
+    # LLM specific
+    llm_provider = models.CharField(max_length=50, blank=True)
+    llm_model = models.CharField(max_length=100, blank=True)
+    prompt_tokens = models.PositiveIntegerField(default=0)
+    completion_tokens = models.PositiveIntegerField(default=0)
+    total_tokens = models.PositiveIntegerField(default=0)
 
+    # Cost tracking
+    cost_usd = models.DecimalField(max_digits=10, decimal_places=6, default=0)
+
+    # Performance
+    response_time_ms = models.PositiveIntegerField(default=0)
+    status_code = models.PositiveIntegerField(default=200)
+    is_error = models.BooleanField(default=False)
+    error_message = models.TextField(blank=True)
+
+    # Metadata
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.TextField(blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    # Timestamp
     created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ['-priority', '-created_at']
+        db_table = 'api_usage_logs'
+        verbose_name = 'API Usage Log'
+        verbose_name_plural = 'API Usage Logs'
         indexes = [
-            models.Index(fields=['category']),
-            models.Index(fields=['is_active', 'priority']),
+            models.Index(fields=['user', '-created_at']),
+            models.Index(fields=['endpoint', '-created_at']),
+            models.Index(fields=['llm_provider', '-created_at']),
+            models.Index(fields=['-created_at']),
+            models.Index(fields=['is_error', '-created_at']),
         ]
 
     def __str__(self):
-        return self.text[:50]
+        return f"{self.user} - {self.endpoint} at {self.created_at}"
+
+    @classmethod
+    def log_request(cls, user, endpoint, method, **kwargs):
+        """
+        Log an API request.
+
+        Args:
+            user: User making the request
+            endpoint: API endpoint called
+            method: HTTP method
+            **kwargs: Additional fields
+        """
+        return cls.objects.create(
+            user=user,
+            endpoint=endpoint,
+            method=method,
+            **kwargs
+        )
 
 
-class ProductMetrics(models.Model):
-    """Daily aggregated product metrics for analytics dashboard."""
+# =============================================================================
+# Daily Aggregation Model
+# =============================================================================
+
+class DailyAggregation(models.Model):
+    """
+    Aggregated daily statistics for the entire platform.
+
+    Used for:
+    - Admin dashboards
+    - Trend analysis
+    - Capacity planning
+    """
+
     date = models.DateField(unique=True)
 
-    total_users = models.IntegerField(default=0)
-    new_users = models.IntegerField(default=0)
-    active_users = models.IntegerField(default=0)
-    returning_users = models.IntegerField(default=0)
+    # User metrics
+    total_users = models.PositiveIntegerField(default=0)
+    new_users = models.PositiveIntegerField(default=0)
+    active_users = models.PositiveIntegerField(default=0)
+    churned_users = models.PositiveIntegerField(default=0)
 
-    total_sessions = models.IntegerField(default=0)
-    total_prompts = models.IntegerField(default=0)
-    total_generations = models.IntegerField(default=0)
-    total_tokens_used = models.BigIntegerField(default=0)
+    # Content metrics
+    total_notes = models.PositiveIntegerField(default=0)
+    notes_created = models.PositiveIntegerField(default=0)
+    notes_edited = models.PositiveIntegerField(default=0)
 
-    new_subscriptions = models.IntegerField(default=0)
-    churned_subscriptions = models.IntegerField(default=0)
-    total_revenue = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    mrr = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    # AI metrics
+    ai_generations = models.PositiveIntegerField(default=0)
+    total_tokens = models.BigIntegerField(default=0)
+    ai_cost_usd = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 
-    feature_usage = models.JSONField(default=dict)
-    model_usage = models.JSONField(default=dict)
+    # Revenue metrics
+    new_subscriptions = models.PositiveIntegerField(default=0)
+    canceled_subscriptions = models.PositiveIntegerField(default=0)
+    revenue_usd = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 
-    error_count = models.IntegerField(default=0)
-    api_latency_avg = models.FloatField(default=0)
+    # Performance metrics
+    avg_response_time_ms = models.FloatField(default=0)
+    error_rate = models.FloatField(default=0)
+    uptime_percent = models.FloatField(default=100)
 
-    d1_retention = models.FloatField(default=0)
-    d7_retention = models.FloatField(default=0)
-    d30_retention = models.FloatField(default=0)
-
+    # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ['-date']
-        verbose_name = 'Product Metrics'
-        verbose_name_plural = 'Product Metrics'
+        db_table = 'daily_aggregations'
+        verbose_name = 'Daily Aggregation'
+        verbose_name_plural = 'Daily Aggregations'
         indexes = [
-            models.Index(fields=['date']),
+            models.Index(fields=['-date']),
         ]
 
     def __str__(self):
-        return f"Metrics for {self.date}"
+        return f"Aggregation for {self.date}"
 
-
-class UserOnboarding(models.Model):
-    """Tracks user onboarding progress and feature discovery."""
-    user = models.OneToOneField(
-        CustomUser,
-        on_delete=models.CASCADE,
-        related_name='onboarding'
-    )
-
-    completed_steps = models.JSONField(default=list)
-    current_step = models.CharField(max_length=50, default='welcome')
-
-    is_complete = models.BooleanField(default=False)
-    completed_at = models.DateTimeField(null=True, blank=True)
-
-    tours_completed = models.JSONField(default=list)
-    tips_dismissed = models.JSONField(default=list)
-
-    selected_use_cases = models.JSONField(default=list)
-    experience_level = models.CharField(
-        max_length=20,
-        choices=[
-            ('beginner', 'Beginner'),
-            ('intermediate', 'Intermediate'),
-            ('advanced', 'Advanced'),
-        ],
-        default='beginner'
-    )
-
-    started_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        verbose_name = 'User Onboarding'
-        verbose_name_plural = 'User Onboarding'
-
-    def __str__(self):
-        return f"Onboarding for {self.user.email}"
-
-
-class UserFavorite(models.Model):
-    """Tracks user favorites for templates, models, and prompts."""
-    user = models.ForeignKey(
-        CustomUser,
-        on_delete=models.CASCADE,
-        related_name='favorites'
-    )
-
-    content_type = models.CharField(
-        max_length=50,
-        choices=[
-            ('template', 'Template'),
-            ('model', 'Model'),
-            ('prompt', 'Prompt'),
-        ]
-    )
-    content_id = models.IntegerField()
-    note = models.CharField(max_length=255, blank=True)
-
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        unique_together = ['user', 'content_type', 'content_id']
-        indexes = [
-            models.Index(fields=['user', 'content_type']),
-        ]
-
-    def __str__(self):
-        return f"{self.user.email} - {self.content_type}:{self.content_id}"
-
-
-class APIKey(models.Model):
-    """User-generated API keys for programmatic access."""
-    user = models.ForeignKey(
-        CustomUser,
-        on_delete=models.CASCADE,
-        related_name='api_keys'
-    )
-
-    name = models.CharField(max_length=100)
-    key_prefix = models.CharField(max_length=8)
-    key_hash = models.CharField(max_length=128)
-
-    scopes = models.JSONField(default=list)
-    rate_limit = models.IntegerField(default=100)
-
-    last_used = models.DateTimeField(null=True, blank=True)
-    usage_count = models.IntegerField(default=0)
-
-    is_active = models.BooleanField(default=True)
-    expires_at = models.DateTimeField(null=True, blank=True)
-
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        indexes = [
-            models.Index(fields=['user', 'is_active']),
-            models.Index(fields=['key_prefix']),
-        ]
-
-    def __str__(self):
-        return f"{self.name} ({self.key_prefix}...)"
-
-
-class Webhook(models.Model):
-    """User-configured webhooks for event notifications."""
-    user = models.ForeignKey(
-        CustomUser,
-        on_delete=models.CASCADE,
-        related_name='webhooks'
-    )
-
-    name = models.CharField(max_length=100)
-    url = models.URLField()
-    secret = models.CharField(max_length=255)
-
-    events = models.JSONField(default=list)
-    is_active = models.BooleanField(default=True)
-
-    last_triggered = models.DateTimeField(null=True, blank=True)
-    failure_count = models.IntegerField(default=0)
-    last_failure = models.DateTimeField(null=True, blank=True)
-    last_failure_reason = models.TextField(blank=True)
-
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        indexes = [
-            models.Index(fields=['user', 'is_active']),
-        ]
-
-    def __str__(self):
-        return f"{self.name} - {self.url[:30]}"
+    @classmethod
+    def get_or_create_today(cls):
+        """Get or create today's aggregation record."""
+        today = timezone.now().date()
+        obj, created = cls.objects.get_or_create(date=today)
+        return obj
