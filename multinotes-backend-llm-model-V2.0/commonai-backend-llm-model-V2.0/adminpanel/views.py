@@ -3,7 +3,7 @@ from rest_framework.views import APIView
 from rest_framework.generics import ListAPIView
 from authentication.models import CustomUser
 from rest_framework.permissions import IsAdminUser
-from .serilizers import UserListSerializer, SingleUserSerializer
+from .serializers import UserListSerializer, SingleUserSerializer
 from rest_framework.response import Response
 from django.conf import settings
 import datetime
