@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/5.0/ref/settings/
 
 from pathlib import Path
 import os
+import logging
 from dotenv import load_dotenv
 from datetime import timedelta
 from django.core.exceptions import ImproperlyConfigured
@@ -612,3 +613,84 @@ LOGGING = {
 
 # Increase response timeout to 60 seconds
 TIMEOUT = 60
+
+
+# =============================================================================
+# SENTRY ERROR TRACKING (Production)
+# =============================================================================
+
+SENTRY_DSN = get_env_variable('SENTRY_DSN')
+
+if SENTRY_DSN and not DEBUG:
+    import sentry_sdk
+    from sentry_sdk.integrations.django import DjangoIntegration
+    from sentry_sdk.integrations.celery import CeleryIntegration
+    from sentry_sdk.integrations.redis import RedisIntegration
+    from sentry_sdk.integrations.logging import LoggingIntegration
+
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        integrations=[
+            DjangoIntegration(
+                transaction_style='url',
+                middleware_spans=True,
+            ),
+            CeleryIntegration(
+                monitor_beat_tasks=True,
+            ),
+            RedisIntegration(),
+            LoggingIntegration(
+                level=logging.INFO,
+                event_level=logging.ERROR,
+            ),
+        ],
+        # Performance monitoring
+        traces_sample_rate=float(get_env_variable('SENTRY_TRACES_SAMPLE_RATE', '0.1')),
+        profiles_sample_rate=float(get_env_variable('SENTRY_PROFILES_SAMPLE_RATE', '0.1')),
+
+        # Release tracking
+        release=get_env_variable('APP_VERSION', '2.0.0'),
+        environment=get_env_variable('ENVIRONMENT', 'production'),
+
+        # Privacy settings
+        send_default_pii=False,
+
+        # Before send hook to filter sensitive data
+        before_send=lambda event, hint: event,
+
+        # Ignore common errors
+        ignore_errors=[
+            KeyboardInterrupt,
+        ],
+    )
+
+
+# =============================================================================
+# CACHING (Redis)
+# =============================================================================
+
+CACHES = {
+    'default': {
+        'BACKEND': 'django_redis.cache.RedisCache',
+        'LOCATION': REDIS_URL,
+        'OPTIONS': {
+            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+            'SOCKET_CONNECT_TIMEOUT': 5,
+            'SOCKET_TIMEOUT': 5,
+            'COMPRESSOR': 'django_redis.compressors.zlib.ZlibCompressor',
+            'IGNORE_EXCEPTIONS': True,
+        },
+        'KEY_PREFIX': 'multinotesai',
+        'TIMEOUT': 300,  # 5 minutes default
+    }
+}
+
+# Cache timeouts for different data types
+CACHE_TIMEOUTS = {
+    'user_profile': 60 * 5,      # 5 minutes
+    'subscription': 60 * 5,       # 5 minutes
+    'llm_models': 60 * 60,        # 1 hour
+    'categories': 60 * 60 * 24,   # 24 hours
+    'templates': 60 * 30,         # 30 minutes
+    'folder_tree': 60 * 2,        # 2 minutes
+}
