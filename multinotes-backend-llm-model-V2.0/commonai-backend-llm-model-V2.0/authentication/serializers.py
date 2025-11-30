@@ -5,8 +5,20 @@ from ticketandcategory.models import MainCategory, Category
 from rest_framework.exceptions import ValidationError
 from .awsservice import getImageUrl
 from django.db.models import Sum
-from coreapp.views.base import format_number
 from coreapp.models import PromptResponse, StorageUsage
+
+
+def format_number(num):
+    """Format large numbers with K/M/B suffixes."""
+    if num is None:
+        return "0"
+    if num >= 1_000_000_000:
+        return f"{num / 1_000_000_000:.1f}B"
+    elif num >= 1_000_000:
+        return f"{num / 1_000_000:.1f}M"
+    elif num >= 1_000:
+        return f"{num / 1_000:.1f}K"
+    return str(int(num))
 from planandsubscription.serializers import (
            ModelPlanSerializer, UpdateSubscriptionSerializer
            )
