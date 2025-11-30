@@ -291,6 +291,25 @@ class CancelSubscription(APIView):
 # LEGACY FUNCTIONS (For backwards compatibility)
 # =============================================================================
 
+def createCustomerOnStripe(name, email):
+    """
+    Legacy Stripe customer creation stub.
+
+    This function was used for Stripe integration but has been replaced
+    by Razorpay. Returns None since Razorpay doesn't use customer IDs
+    in the same way Stripe does.
+
+    Args:
+        name: Customer name
+        email: Customer email
+
+    Returns:
+        None (Razorpay doesn't require pre-created customers)
+    """
+    logger.debug(f"createCustomerOnStripe called (stub): {email}")
+    return None
+
+
 def subscriptions():
     """
     Legacy function for cron job compatibility.
