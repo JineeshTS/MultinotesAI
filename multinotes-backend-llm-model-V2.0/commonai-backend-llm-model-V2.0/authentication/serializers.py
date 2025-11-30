@@ -5,7 +5,7 @@ from ticketandcategory.models import MainCategory, Category
 from rest_framework.exceptions import ValidationError
 from .awsservice import getImageUrl
 from django.db.models import Sum
-from coreapp.views import format_number
+from coreapp.views.base import format_number
 from coreapp.models import PromptResponse, StorageUsage
 from planandsubscription.serializers import (
            ModelPlanSerializer, UpdateSubscriptionSerializer
