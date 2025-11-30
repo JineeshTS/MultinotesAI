@@ -288,6 +288,102 @@ class CancelSubscription(APIView):
 
 
 # =============================================================================
+# LEGACY STRIPE API VIEWS (Stubs for backwards compatibility)
+# =============================================================================
+
+class CreatePaymentIntent(APIView):
+    """Legacy Stripe CreatePaymentIntent stub - use Razorpay instead."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        return Response({
+            'success': False,
+            'error': {
+                'code': 'DEPRECATED',
+                'message': 'Stripe payments are deprecated. Please use Razorpay.'
+            }
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+
+class AddCard(APIView):
+    """Legacy Stripe AddCard stub - use Razorpay instead."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        return Response({
+            'success': False,
+            'error': {
+                'code': 'DEPRECATED',
+                'message': 'Stripe card management is deprecated. Please use Razorpay.'
+            }
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+
+class GetCards(APIView):
+    """Legacy Stripe GetCards stub."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return success_response({'cards': []})
+
+
+class UpdateCard(APIView):
+    """Legacy Stripe UpdateCard stub."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        return Response({
+            'success': False,
+            'error': {
+                'code': 'DEPRECATED',
+                'message': 'Stripe card management is deprecated. Please use Razorpay.'
+            }
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+
+class DeleteCard(APIView):
+    """Legacy Stripe DeleteCard stub."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        return Response({
+            'success': False,
+            'error': {
+                'code': 'DEPRECATED',
+                'message': 'Stripe card management is deprecated. Please use Razorpay.'
+            }
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+
+class GetCustomerDetails(APIView):
+    """Legacy Stripe GetCustomerDetails stub."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, custId):
+        return Response({
+            'success': False,
+            'error': {
+                'code': 'DEPRECATED',
+                'message': 'Stripe customer details are deprecated. Please use Razorpay.'
+            }
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+
+class MarkCardDefault(APIView):
+    """Legacy Stripe MarkCardDefault stub."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        return Response({
+            'success': False,
+            'error': {
+                'code': 'DEPRECATED',
+                'message': 'Stripe card management is deprecated. Please use Razorpay.'
+            }
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+
+# =============================================================================
 # LEGACY FUNCTIONS (For backwards compatibility)
 # =============================================================================
 
