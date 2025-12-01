@@ -33,7 +33,7 @@ from .base import (
 
 # Re-export all views from the original views.py for backwards compatibility
 # This allows existing imports to continue working while we migrate
-from ..views import (
+from ..views_legacy import (
     # Generation Views
     GenerateView,
     GenerateImage,
