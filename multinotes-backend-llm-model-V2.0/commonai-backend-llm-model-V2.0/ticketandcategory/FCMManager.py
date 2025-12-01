@@ -20,23 +20,37 @@ import json
 # cred = credentials.Certificate(settings.BASE_DIR /"serviceAccountKey.json")
 # firebase_admin.initialize_app(cred)
 
-# Initialize FCM client with the server key
-fcm = FCMNotification(api_key=os.getenv('SERVER_KEY'))
+# Initialize FCM client with the server key (only if available)
+_server_key = os.getenv('SERVER_KEY')
+if _server_key:
+    try:
+        fcm = FCMNotification(api_key=_server_key)
+    except Exception as e:
+        print(f"Warning: FCM initialization failed: {e}")
+        fcm = None
+else:
+    print("Warning: SERVER_KEY not configured - push notifications will be disabled")
+    fcm = None
 
 
 # Send a notification to a single device
 def pushMessage(deviceToken, title, body):
+    if fcm is None:
+        print("FCM not configured - push notification skipped")
+        return None
     try:
         result = fcm.notify_single_device(
-            registration_id=deviceToken, 
-            message_title=title, 
-            message_body=body, 
+            registration_id=deviceToken,
+            message_title=title,
+            message_body=body,
             message_icon = "https://multinotes.ai/favicon.svg",
             timeout=5,
         )
         print(result)
+        return result
     except Exception as e:
-        print(e)
+        print(f"FCM push notification failed: {e}")
+        return None
 
 
 # class TestNotification(APIView):
