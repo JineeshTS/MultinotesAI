@@ -170,3 +170,4 @@ XlsxWriter==3.2.0
 yarl==1.9.4
 yt-dlp==2024.10.7
 zope.interface==6.3
+tiktoken==0.6.0
