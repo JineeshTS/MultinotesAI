@@ -80,7 +80,10 @@ import subprocess
 import fitz  # PyMuPDF for PDF
 import pandas as pd
 from docx import Document as word_docments
-import textract
+try:
+    import textract
+except ImportError:
+    textract = None  # textract not available - .doc files won't be supported
 import csv
 import tiktoken
 from openai import OpenAI
@@ -3935,8 +3938,11 @@ def extract_text_from_docx(file_path):
     # return summarize_text
 
 def extract_text_from_doc(file_path):
+    if textract is None:
+        os.remove(file_path)
+        raise ImportError("textract module not available. .doc file processing is not supported.")
     text = textract.process(str(file_path))
-    
+
     os.remove(file_path)
     return text.decode('utf-8')
 

@@ -2,7 +2,6 @@ from django.urls import path
 from .views import *
 from .payments import *
 from .load_drive import *
-from .import load_drive
 
 
 urlpatterns=[

@@ -39,11 +39,35 @@ from django.core.files.base import ContentFile
 import uuid
 # import tiktoken
 
-GOOGLE_API_KEY=os.getenv('GOOGLE_API_KEY')
-LLama_API_KEY=os.getenv('LLama_API_KEY')
-genai.configure(api_key=GOOGLE_API_KEY)
-togetherClient = Together(api_key=LLama_API_KEY)
-openAiClient = OpenAI()
+# Initialize API clients gracefully (allow app to start without all keys)
+GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
+LLama_API_KEY = os.getenv('LLama_API_KEY')
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+
+if GOOGLE_API_KEY:
+    genai.configure(api_key=GOOGLE_API_KEY)
+else:
+    print("Warning: GOOGLE_API_KEY not configured - Gemini features will be disabled")
+
+if LLama_API_KEY:
+    try:
+        togetherClient = Together(api_key=LLama_API_KEY)
+    except Exception as e:
+        print(f"Warning: Together client initialization failed: {e}")
+        togetherClient = None
+else:
+    print("Warning: LLama_API_KEY not configured - Together/LLama features will be disabled")
+    togetherClient = None
+
+if OPENAI_API_KEY:
+    try:
+        openAiClient = OpenAI(api_key=OPENAI_API_KEY)
+    except Exception as e:
+        print(f"Warning: OpenAI client initialization failed: {e}")
+        openAiClient = None
+else:
+    print("Warning: OPENAI_API_KEY not configured - OpenAI features will be disabled")
+    openAiClient = None
 
 
 channel_layer = get_channel_layer()

@@ -12,53 +12,83 @@ import os
 import json
 import logging
 from datetime import datetime
-from pythonjsonlogger import jsonlogger
+
+# Try to import python-json-logger, fallback to basic logging if not available
+try:
+    from pythonjsonlogger import jsonlogger
+    HAS_JSON_LOGGER = True
+except ImportError:
+    print("Warning: python-json-logger not installed - using basic JSON formatting")
+    HAS_JSON_LOGGER = False
+    jsonlogger = None
 
 
 # =============================================================================
 # Custom JSON Formatter
 # =============================================================================
 
-class CustomJsonFormatter(jsonlogger.JsonFormatter):
-    """
-    Custom JSON formatter for structured logging.
+class BasicJsonFormatter(logging.Formatter):
+    """Basic JSON formatter fallback when python-json-logger is not available."""
 
-    Adds standard fields:
-    - timestamp
-    - level
-    - logger
-    - message
-    - request_id (if available)
-    - user_id (if available)
-    """
+    def format(self, record):
+        log_record = {
+            'timestamp': datetime.utcnow().isoformat(),
+            'level': record.levelname,
+            'logger': record.name,
+            'message': record.getMessage(),
+            'source': f"{record.filename}:{record.lineno}",
+            'function': record.funcName,
+        }
+        if record.exc_info:
+            log_record['exception'] = self.formatException(record.exc_info)
+        return json.dumps(log_record)
 
-    def add_fields(self, log_record, record, message_dict):
-        super().add_fields(log_record, record, message_dict)
 
-        # Add timestamp
-        log_record['timestamp'] = datetime.utcnow().isoformat()
+# Use python-json-logger if available, otherwise use basic formatter
+if HAS_JSON_LOGGER:
+    class CustomJsonFormatter(jsonlogger.JsonFormatter):
+        """
+        Custom JSON formatter for structured logging.
 
-        # Add level name
-        log_record['level'] = record.levelname
+        Adds standard fields:
+        - timestamp
+        - level
+        - logger
+        - message
+        - request_id (if available)
+        - user_id (if available)
+        """
 
-        # Add logger name
-        log_record['logger'] = record.name
+        def add_fields(self, log_record, record, message_dict):
+            super().add_fields(log_record, record, message_dict)
 
-        # Add source location
-        log_record['source'] = f"{record.filename}:{record.lineno}"
+            # Add timestamp
+            log_record['timestamp'] = datetime.utcnow().isoformat()
 
-        # Add function name
-        log_record['function'] = record.funcName
+            # Add level name
+            log_record['level'] = record.levelname
 
-        # Add process/thread info for debugging
-        log_record['process_id'] = record.process
-        log_record['thread_id'] = record.thread
+            # Add logger name
+            log_record['logger'] = record.name
 
-        # Extract extra fields
-        if hasattr(record, 'request_id'):
-            log_record['request_id'] = record.request_id
-        if hasattr(record, 'user_id'):
-            log_record['user_id'] = record.user_id
+            # Add source location
+            log_record['source'] = f"{record.filename}:{record.lineno}"
+
+            # Add function name
+            log_record['function'] = record.funcName
+
+            # Add process/thread info for debugging
+            log_record['process_id'] = record.process
+            log_record['thread_id'] = record.thread
+
+            # Extract extra fields
+            if hasattr(record, 'request_id'):
+                log_record['request_id'] = record.request_id
+            if hasattr(record, 'user_id'):
+                log_record['user_id'] = record.user_id
+else:
+    # Fallback when python-json-logger is not installed
+    CustomJsonFormatter = BasicJsonFormatter
 
 
 class SimpleFormatter(logging.Formatter):

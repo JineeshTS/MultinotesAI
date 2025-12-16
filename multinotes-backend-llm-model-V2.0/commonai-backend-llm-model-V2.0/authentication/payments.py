@@ -288,8 +288,123 @@ class CancelSubscription(APIView):
 
 
 # =============================================================================
+# LEGACY STRIPE API VIEWS (Stubs for backwards compatibility)
+# =============================================================================
+
+class CreatePaymentIntent(APIView):
+    """Legacy Stripe CreatePaymentIntent stub - use Razorpay instead."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        return Response({
+            'success': False,
+            'error': {
+                'code': 'DEPRECATED',
+                'message': 'Stripe payments are deprecated. Please use Razorpay.'
+            }
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+
+class AddCard(APIView):
+    """Legacy Stripe AddCard stub - use Razorpay instead."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        return Response({
+            'success': False,
+            'error': {
+                'code': 'DEPRECATED',
+                'message': 'Stripe card management is deprecated. Please use Razorpay.'
+            }
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+
+class GetCards(APIView):
+    """Legacy Stripe GetCards stub."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return success_response({'cards': []})
+
+
+class UpdateCard(APIView):
+    """Legacy Stripe UpdateCard stub."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        return Response({
+            'success': False,
+            'error': {
+                'code': 'DEPRECATED',
+                'message': 'Stripe card management is deprecated. Please use Razorpay.'
+            }
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+
+class DeleteCard(APIView):
+    """Legacy Stripe DeleteCard stub."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        return Response({
+            'success': False,
+            'error': {
+                'code': 'DEPRECATED',
+                'message': 'Stripe card management is deprecated. Please use Razorpay.'
+            }
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+
+class GetCustomerDetails(APIView):
+    """Legacy Stripe GetCustomerDetails stub."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, custId):
+        return Response({
+            'success': False,
+            'error': {
+                'code': 'DEPRECATED',
+                'message': 'Stripe customer details are deprecated. Please use Razorpay.'
+            }
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+
+class MarkCardDefault(APIView):
+    """Legacy Stripe MarkCardDefault stub."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        return Response({
+            'success': False,
+            'error': {
+                'code': 'DEPRECATED',
+                'message': 'Stripe card management is deprecated. Please use Razorpay.'
+            }
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+
+# =============================================================================
 # LEGACY FUNCTIONS (For backwards compatibility)
 # =============================================================================
+
+def createCustomerOnStripe(name, email):
+    """
+    Legacy Stripe customer creation stub.
+
+    This function was used for Stripe integration but has been replaced
+    by Razorpay. Returns None since Razorpay doesn't use customer IDs
+    in the same way Stripe does.
+
+    Args:
+        name: Customer name
+        email: Customer email
+
+    Returns:
+        None (Razorpay doesn't require pre-created customers)
+    """
+    logger.debug(f"createCustomerOnStripe called (stub): {email}")
+    return None
+
 
 def subscriptions():
     """
